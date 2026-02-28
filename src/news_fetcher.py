@@ -5,8 +5,8 @@ Returns structured story data with source links.
 
 import json
 import logging
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, timedelta
 
 import anthropic
 
@@ -25,20 +25,81 @@ class Story:
     topic: str
 
 
-def fetch_all_stories(client: anthropic.Anthropic, today: str) -> dict[str, list[Story]]:
+def fetch_all_stories(
+    client: anthropic.Anthropic,
+    today_date: date,
+) -> dict[str, list[Story]]:
     """Fetch stories for every configured topic.
 
     Returns a dict mapping topic names to story lists.
     """
-    results: dict[str, list[Story]] = {}
+    today = today_date.strftime("%A, %-d %B %Y")
+    yesterday = (today_date - timedelta(days=1)).strftime("%A, %-d %B %Y")
 
+    results: dict[str, list[Story]] = {}
     for topic in TOPICS:
         logger.info(f"Fetching stories for: {topic.name}")
-        stories = _fetch_topic(client, topic, today)
+        stories = _fetch_topic(client, topic, today, yesterday)
         results[topic.name] = stories
         logger.info(f"  Got {len(stories)} stories for {topic.name}")
 
     return results
+
+
+def fetch_intro(
+    client: anthropic.Anthropic,
+    stories_by_topic: dict[str, list[Story]],
+    today: str,
+) -> str:
+    """Generate a short, conversational intro paragraph summarising the top stories.
+
+    Makes a single API call without web search — Claude writes from the story
+    headlines already gathered.  Returns an empty string on failure.
+    """
+    all_stories = [s for stories in stories_by_topic.values() for s in stories]
+    if not all_stories:
+        return ""
+
+    rank = {"high": 0, "medium": 1, "low": 2}
+    all_stories.sort(key=lambda s: rank.get(s.importance, 1))
+    top = all_stories[:5]
+
+    stories_text = "\n".join(
+        f"- {s.headline} (section: {s.topic})" for s in top
+    )
+
+    prompt = (
+        f"Today is {today}.\n\n"
+        "Based on these top news stories from overnight and this morning, write a short, "
+        "conversational intro paragraph (2-4 sentences) for a morning email newsletter "
+        "called 'First Light'.\n\n"
+        "Guidelines:\n"
+        "- Write in a direct, collegial tone — like a knowledgeable colleague giving a "
+        "quick briefing over coffee.\n"
+        "- Mention 3-5 of the most significant stories by name.\n"
+        "- Use Australian English spelling throughout.\n"
+        "- Do not use bullet points or lists.\n"
+        "- Do not open with a greeting such as 'Good morning'.\n"
+        "- Dive straight into the news.\n\n"
+        f"Today's top stories:\n{stories_text}\n\n"
+        "Write only the paragraph — no headings, no sign-off, no other commentary."
+    )
+
+    try:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                return block.text.strip()
+    except anthropic.APIError as exc:
+        logger.error(f"API error generating intro: {exc}")
+    except anthropic.APIConnectionError as exc:
+        logger.error(f"Connection error generating intro: {exc}")
+
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -46,9 +107,14 @@ def fetch_all_stories(client: anthropic.Anthropic, today: str) -> dict[str, list
 # ---------------------------------------------------------------------------
 
 
-def _fetch_topic(client: anthropic.Anthropic, topic: Topic, today: str) -> list[Story]:
+def _fetch_topic(
+    client: anthropic.Anthropic,
+    topic: Topic,
+    today: str,
+    yesterday: str,
+) -> list[Story]:
     """Make a single API call with web search for one topic."""
-    system = SYSTEM_PROMPT.format(today=today)
+    system = SYSTEM_PROMPT.format(today=today, yesterday=yesterday)
 
     try:
         response = client.messages.create(

@@ -14,7 +14,7 @@ import anthropic
 from .config import EMAIL_SUBJECT_TEMPLATE
 from .email_builder import build_email_html, build_plain_text
 from .email_sender import send_newsletter
-from .news_fetcher import fetch_all_stories
+from .news_fetcher import fetch_all_stories, fetch_intro
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,10 +46,10 @@ def main() -> None:
     recipient = os.environ.get("RECIPIENT_EMAIL", "ethanryan9@gmail.com")
 
     # ------------------------------------------------------------------
-    # Fetch news
+    # Fetch news (pass date object so fetcher can compute yesterday)
     # ------------------------------------------------------------------
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
-    stories_by_topic = fetch_all_stories(client, today_long)
+    stories_by_topic = fetch_all_stories(client, today_aest)
 
     total = sum(len(s) for s in stories_by_topic.values())
     logger.info(f"Total stories fetched: {total}")
@@ -58,10 +58,16 @@ def main() -> None:
         logger.warning("No stories fetched for any topic. Sending minimal newsletter.")
 
     # ------------------------------------------------------------------
+    # Generate intro paragraph from gathered headlines
+    # ------------------------------------------------------------------
+    logger.info("Generating intro paragraph")
+    intro = fetch_intro(client, stories_by_topic, today_long)
+
+    # ------------------------------------------------------------------
     # Build and send email
     # ------------------------------------------------------------------
-    html_body = build_email_html(stories_by_topic, today_long)
-    plain_body = build_plain_text(stories_by_topic, today_long)
+    html_body = build_email_html(stories_by_topic, today_long, intro=intro)
+    plain_body = build_plain_text(stories_by_topic, today_long, intro=intro)
     subject = EMAIL_SUBJECT_TEMPLATE.format(date=today_short)
 
     ok = send_newsletter(subject, html_body, plain_body, recipient)

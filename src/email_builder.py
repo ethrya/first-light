@@ -8,8 +8,13 @@ Layout uses tables for maximum cross-client support.
 from .news_fetcher import Story
 
 
-def build_email_html(stories_by_topic: dict[str, list[Story]], today_str: str) -> str:
+def build_email_html(
+    stories_by_topic: dict[str, list[Story]],
+    today_str: str,
+    intro: str = "",
+) -> str:
     """Build the complete HTML email."""
+    intro_html = _build_intro(intro)
     top_stories_html = _build_top_stories(stories_by_topic)
     topic_sections_html = _build_topic_sections(stories_by_topic)
 
@@ -43,9 +48,11 @@ def build_email_html(stories_by_topic: dict[str, list[Story]], today_str: str) -
             </td>
           </tr>
 
+          <!-- Intro paragraph -->
+{intro_html}
           <!-- Top Stories -->
           <tr>
-            <td style="padding:24px;">
+            <td style="padding:24px 24px 20px;">
               <h2 style="margin:0 0 16px; color:#1a1a2e; font-size:20px;
                          border-bottom:2px solid #f0c040; padding-bottom:8px;">
                 Top Stories
@@ -75,9 +82,16 @@ def build_email_html(stories_by_topic: dict[str, list[Story]], today_str: str) -
 </html>"""
 
 
-def build_plain_text(stories_by_topic: dict[str, list[Story]], today_str: str) -> str:
+def build_plain_text(
+    stories_by_topic: dict[str, list[Story]],
+    today_str: str,
+    intro: str = "",
+) -> str:
     """Build a plain-text version for email clients that don't render HTML."""
     lines = [f"FIRST LIGHT \u2014 {today_str}", "=" * 40, ""]
+
+    if intro:
+        lines += [intro, ""]
 
     # Top stories
     top = _select_top_stories(stories_by_topic)
@@ -118,6 +132,23 @@ def build_plain_text(stories_by_topic: dict[str, list[Story]], today_str: str) -
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_intro(intro: str) -> str:
+    """Render the intro paragraph row, or an empty string if there is none."""
+    if not intro:
+        return ""
+    return (
+        "          <tr>\n"
+        "            <td style=\"padding:20px 24px 0; background-color:#ffffff;\">\n"
+        "              <p style=\"margin:0; font-size:15px; color:#333333; "
+        "line-height:1.65; font-style:italic; border-left:3px solid #f0c040; "
+        "padding-left:12px;\">\n"
+        f"                {_esc(intro)}\n"
+        "              </p>\n"
+        "            </td>\n"
+        "          </tr>\n"
+    )
 
 
 def _select_top_stories(stories_by_topic: dict[str, list[Story]]) -> list[Story]:
