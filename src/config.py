@@ -41,9 +41,12 @@ Use all available searches to find fresh content.
 - If after trying multiple searches you still cannot find stories from today or yesterday, \
 include the most recent stories available and briefly note the publication date in the summary.
 
-When summarising news:
-- Be concise and factual. Each story summary should be 2-3 sentences maximum.
-- Focus on what happened, why it matters, and what comes next.
+WRITING STYLE:
+- Write punchy, direct summaries. 1-2 sentences max — no filler, no fluff.
+- Lead with what happened. Add why it matters only if it's not obvious.
+- Use short sentences. Prefer active voice. Cut unnecessary words.
+- Headlines should be sharp and specific — not vague or generic.
+- Write like a newsroom wire, not an essay.
 - Always include the source name and the URL where you found the story.
 - If no qualifying stories exist for a topic, return {{"stories": []}}.
 - Format your response as a JSON object with this structure:
@@ -51,8 +54,8 @@ When summarising news:
 {{
   "stories": [
     {{
-      "headline": "Short headline",
-      "summary": "2-3 sentence summary of the story.",
+      "headline": "Short, punchy headline",
+      "summary": "1-2 sentence summary. Direct and factual.",
       "source_name": "Name of Publication",
       "source_url": "https://full-url-to-article",
       "importance": "high" | "medium" | "low"

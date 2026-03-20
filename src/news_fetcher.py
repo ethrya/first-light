@@ -71,19 +71,16 @@ def fetch_intro(
 
     prompt = (
         f"Today is {today}.\n\n"
-        "Based on these top news stories from overnight and this morning, write a short, "
-        "conversational intro paragraph (2-4 sentences) for a morning email newsletter "
-        "called 'First Light'.\n\n"
-        "Guidelines:\n"
-        "- Write in a direct, collegial tone — like a knowledgeable colleague giving a "
-        "quick briefing over coffee.\n"
-        "- Mention 3-5 of the most significant stories by name.\n"
-        "- Use Australian English spelling throughout.\n"
-        "- Do not use bullet points or lists.\n"
-        "- Do not open with a greeting such as 'Good morning'.\n"
-        "- Dive straight into the news.\n\n"
+        "Write a punchy 2-3 sentence intro for a morning news email called 'First Light'.\n\n"
+        "Rules:\n"
+        "- Dive straight in. No greeting, no 'Good morning'.\n"
+        "- Name-drop 3-4 of the biggest stories. Be specific.\n"
+        "- Keep it tight and direct — like a colleague speed-briefing you in the lift.\n"
+        "- Short sentences. No waffle.\n"
+        "- Australian English spelling.\n"
+        "- No bullet points, no lists, no headings, no sign-off.\n\n"
         f"Today's top stories:\n{stories_text}\n\n"
-        "Write only the paragraph — no headings, no sign-off, no other commentary."
+        "Write only the paragraph."
     )
 
     try:
