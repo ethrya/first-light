@@ -94,8 +94,21 @@ def fetch_intro(
                 temperature=0.4,
             ),
         )
-        if response.text:
-            return response.text.strip()
+        # Extract text from parts (same approach as story responses)
+        intro_text = ""
+        try:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "text") and part.text:
+                    intro_text = part.text.strip()
+                    break
+        except (AttributeError, IndexError):
+            intro_text = (response.text or "").strip()
+
+        if intro_text:
+            logger.info(f"Intro generated: {intro_text[:80]}...")
+            return intro_text
+        else:
+            logger.warning("Intro response was empty")
     except Exception as exc:
         logger.error(f"Error generating intro: {exc}")
 
@@ -135,6 +148,9 @@ def _fetch_topic(
 
     # Supplement missing source URLs from grounding metadata
     grounding_urls = _extract_grounding_urls(response)
+    if grounding_urls:
+        for title, url in list(grounding_urls.items())[:5]:
+            logger.debug(f"  Grounding: {title!r} → {url[:80]}")
     _enrich_with_grounding(stories, grounding_urls)
 
     return stories
@@ -276,16 +292,20 @@ def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str])
     prefer grounding metadata. Match by source name or headline keywords.
     """
     if not grounding_urls:
+        logger.warning("No grounding URLs available")
         return
 
+    logger.info(f"Grounding URLs available: {len(grounding_urls)}")
     url_list = list(grounding_urls.items())
+    matched = 0
 
     for story in stories:
-        # Try matching by source name in the grounding title
         source_lower = story.source_name.lower()
-        headline_words = set(story.headline.lower().split())
-        # Remove common words for matching
-        headline_words -= {"the", "a", "an", "in", "on", "at", "to", "for", "of", "and", "is", "are", "was"}
+        headline_lower = story.headline.lower()
+        headline_words = set(headline_lower.split())
+        headline_words -= {"the", "a", "an", "in", "on", "at", "to", "for", "of",
+                           "and", "is", "are", "was", "has", "have", "as", "by",
+                           "its", "it", "but", "or", "not", "with", "from", "new"}
 
         best_url = ""
         best_score = 0
@@ -298,6 +318,10 @@ def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str])
             if source_lower and source_lower in title_lower:
                 score += 3
 
+            # Check if source name appears in URL domain
+            if source_lower and source_lower.replace(" ", "") in url.lower():
+                score += 2
+
             # Count headline word matches
             title_words = set(title_lower.split())
             overlap = headline_words & title_words
@@ -307,5 +331,8 @@ def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str])
                 best_score = score
                 best_url = url
 
-        if best_url and best_score >= 2:
+        if best_url and best_score >= 1:
             story.source_url = best_url
+            matched += 1
+
+    logger.info(f"Matched {matched}/{len(stories)} stories with grounding URLs")
