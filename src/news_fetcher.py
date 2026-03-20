@@ -94,13 +94,14 @@ def fetch_intro(
                 temperature=0.4,
             ),
         )
-        # Extract text from parts (same approach as story responses)
+        # Extract text from all parts (model may split across multiple parts)
         intro_text = ""
         try:
+            parts_text = []
             for part in response.candidates[0].content.parts:
                 if hasattr(part, "text") and part.text:
-                    intro_text = part.text.strip()
-                    break
+                    parts_text.append(part.text)
+            intro_text = " ".join(parts_text).strip()
         except (AttributeError, IndexError):
             intro_text = (response.text or "").strip()
 
@@ -181,7 +182,7 @@ def _parse_response(response, topic_name: str) -> list[Story]:
                 headline=item.get("headline", "Untitled"),
                 summary=item.get("summary", ""),
                 source_name=item.get("source_name", ""),
-                source_url=item.get("source_url", ""),  # may be overridden by grounding
+                source_url="",  # filled from grounding metadata only
                 importance=item.get("importance", "medium"),
                 topic=topic_name,
             )

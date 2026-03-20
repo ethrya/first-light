@@ -176,12 +176,13 @@ def _render_top_stories(top: list[Story]) -> str:
     parts: list[str] = []
     for story in top:
         headline_html = _headline_link(story, font_size=16)
+        source_tag = _source_tag(story, font_size=13)
         parts.append(
             f'<div style="margin-bottom:14px;">'
             f'<p style="margin:0 0 4px; font-size:16px; font-weight:600; '
             f'color:#1a1a2e;">{headline_html}</p>'
             f'<p style="margin:0; font-size:14px; color:#444; line-height:1.4;">'
-            f"{_esc(story.summary)}</p>"
+            f"{_esc(story.summary)}{source_tag}</p>"
             f"</div>"
         )
     return "\n              ".join(parts)
@@ -208,12 +209,13 @@ def _build_topic_sections(
             story_parts: list[str] = []
             for story in filtered:
                 headline_html = _headline_link(story, font_size=15)
+                source_tag = _source_tag(story, font_size=12)
                 story_parts.append(
                     f'<div style="margin-bottom:12px;">'
                     f'<p style="margin:0 0 2px; font-size:15px; font-weight:600; '
                     f'color:#1a1a2e;">{headline_html}</p>'
                     f'<p style="margin:0; font-size:13px; color:#444; '
-                    f'line-height:1.4;">{_esc(story.summary)}</p>'
+                    f'line-height:1.4;">{_esc(story.summary)}{source_tag}</p>'
                     f"</div>"
                 )
             body = "\n              ".join(story_parts)
@@ -240,6 +242,18 @@ def _headline_link(story: Story, font_size: int = 15) -> str:
         f'<a href="{_esc(story.source_url)}" '
         f'style="color:#1a1a2e; text-decoration:none; font-size:{font_size}px;">'
         f"{escaped}</a>"
+    )
+
+
+def _source_tag(story: Story, font_size: int = 12) -> str:
+    """Render a source attribution tag after the summary."""
+    if not story.source_name:
+        return ""
+    label = _esc(story.source_name)
+    # If no URL, just show source name in grey
+    return (
+        f' <span style="color:#888; font-size:{font_size}px;">'
+        f"— {label}</span>"
     )
 
 
