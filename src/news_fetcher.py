@@ -275,13 +275,48 @@ def _extract_grounding_urls(response) -> dict[str, str]:
     """
     urls: dict[str, str] = {}
     try:
-        chunks = response.candidates[0].grounding_metadata.grounding_chunks
-        for chunk in (chunks or []):
-            if chunk.web and chunk.web.uri:
-                title = chunk.web.title or ""
-                urls[title] = chunk.web.uri
-    except (AttributeError, IndexError):
-        pass
+        metadata = response.candidates[0].grounding_metadata
+        if metadata is None:
+            logger.info("  No grounding_metadata on response")
+            return urls
+
+        # Try grounding_chunks
+        chunks = getattr(metadata, "grounding_chunks", None)
+        if chunks:
+            for chunk in chunks:
+                if chunk.web and chunk.web.uri:
+                    title = chunk.web.title or ""
+                    urls[title] = chunk.web.uri
+
+        # Also try grounding_supports (alternative structure in some API versions)
+        supports = getattr(metadata, "grounding_supports", None)
+        if supports:
+            for support in supports:
+                for ref in getattr(support, "grounding_chunk_indices", []):
+                    if chunks and ref < len(chunks):
+                        chunk = chunks[ref]
+                        if chunk.web and chunk.web.uri:
+                            title = chunk.web.title or ""
+                            urls[title] = chunk.web.uri
+
+        # Try search_entry_point for rendered search results
+        sep = getattr(metadata, "search_entry_point", None)
+        if sep:
+            logger.info("  Has search_entry_point (rendered search widget)")
+
+        # Log what we found on the metadata object
+        if not urls:
+            attrs = [a for a in dir(metadata) if not a.startswith("_")]
+            logger.info(f"  Grounding metadata attrs: {attrs}")
+            if chunks is not None:
+                logger.info(f"  grounding_chunks count: {len(chunks)}")
+                for i, c in enumerate(chunks[:3]):
+                    logger.info(f"    chunk[{i}]: {c}")
+            if supports is not None:
+                logger.info(f"  grounding_supports count: {len(supports)}")
+
+    except (AttributeError, IndexError) as exc:
+        logger.warning(f"  Error extracting grounding URLs: {exc}")
     return urls
 
 
