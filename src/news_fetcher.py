@@ -281,39 +281,31 @@ def _extract_grounding_urls(response) -> dict[str, str]:
             return urls
 
         # Try grounding_chunks
-        chunks = getattr(metadata, "grounding_chunks", None)
-        if chunks:
-            for chunk in chunks:
-                if chunk.web and chunk.web.uri:
-                    title = chunk.web.title or ""
-                    urls[title] = chunk.web.uri
+        chunks = getattr(metadata, "grounding_chunks", None) or []
+        for chunk in chunks:
+            if hasattr(chunk, "web") and chunk.web and chunk.web.uri:
+                title = chunk.web.title or ""
+                urls[title] = chunk.web.uri
+                logger.info(f"  Chunk: {title!r} → {chunk.web.uri[:80]}")
 
-        # Also try grounding_supports (alternative structure in some API versions)
-        supports = getattr(metadata, "grounding_supports", None)
-        if supports:
-            for support in supports:
-                for ref in getattr(support, "grounding_chunk_indices", []):
-                    if chunks and ref < len(chunks):
-                        chunk = chunks[ref]
-                        if chunk.web and chunk.web.uri:
-                            title = chunk.web.title or ""
-                            urls[title] = chunk.web.uri
+        # Also try grounding_supports which reference chunks by index
+        supports = getattr(metadata, "grounding_supports", None) or []
+        for support in supports:
+            indices = getattr(support, "grounding_chunk_indices", []) or []
+            for ref in indices:
+                if ref < len(chunks):
+                    chunk = chunks[ref]
+                    if hasattr(chunk, "web") and chunk.web and chunk.web.uri:
+                        title = chunk.web.title or ""
+                        urls[title] = chunk.web.uri
 
-        # Try search_entry_point for rendered search results
-        sep = getattr(metadata, "search_entry_point", None)
-        if sep:
-            logger.info("  Has search_entry_point (rendered search widget)")
+        # Log retrieval queries if available
+        queries = getattr(metadata, "web_search_queries", None)
+        if queries:
+            logger.info(f"  Search queries used: {queries[:3]}")
 
-        # Log what we found on the metadata object
         if not urls:
-            attrs = [a for a in dir(metadata) if not a.startswith("_")]
-            logger.info(f"  Grounding metadata attrs: {attrs}")
-            if chunks is not None:
-                logger.info(f"  grounding_chunks count: {len(chunks)}")
-                for i, c in enumerate(chunks[:3]):
-                    logger.info(f"    chunk[{i}]: {c}")
-            if supports is not None:
-                logger.info(f"  grounding_supports count: {len(supports)}")
+            logger.info(f"  No URLs found. chunks={len(chunks)}, supports={len(supports)}")
 
     except (AttributeError, IndexError) as exc:
         logger.warning(f"  Error extracting grounding URLs: {exc}")
