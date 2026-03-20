@@ -47,9 +47,10 @@ WRITING STYLE:
 - Use short sentences. Prefer active voice. Cut unnecessary words.
 - Headlines should be sharp and specific — not vague or generic.
 - Write like a newsroom wire, not an essay.
-- Always include the source name and the URL where you found the story.
+- Include the source name for each story.
+- Do NOT fabricate URLs. Leave source_url as an empty string — real URLs will be added automatically from search metadata.
 - If no qualifying stories exist for a topic, return {{"stories": []}}.
-- Format your response as a JSON object with this structure:
+- Format your response as a JSON object with this exact structure:
 
 {{
   "stories": [
@@ -57,11 +58,13 @@ WRITING STYLE:
       "headline": "Short, punchy headline",
       "summary": "1-2 sentence summary. Direct and factual.",
       "source_name": "Name of Publication",
-      "source_url": "https://full-url-to-article",
-      "importance": "high" | "medium" | "low"
+      "source_url": "",
+      "importance": "high"
     }}
   ]
 }}
+
+The importance field must be one of: "high", "medium", "low".
 
 Return ONLY valid JSON. No markdown fencing, no commentary outside the JSON.\
 """

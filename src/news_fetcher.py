@@ -69,18 +69,19 @@ def fetch_intro(
         f"- {s.headline} (section: {s.topic})" for s in top
     )
 
+    system = (
+        "You are a newsletter writer. Write in Australian English. "
+        "Your output must be ONLY the requested paragraph — no headings, "
+        "no commentary, no meta-text, no bullet points."
+    )
+
     prompt = (
-        f"Today is {today}.\n\n"
-        "Write a punchy 2-3 sentence intro for a morning news email called 'First Light'.\n\n"
-        "Rules:\n"
-        "- Dive straight in. No greeting, no 'Good morning'.\n"
-        "- Name-drop 3-4 of the biggest stories. Be specific.\n"
-        "- Keep it tight and direct — like a colleague speed-briefing you in the lift.\n"
-        "- Short sentences. No waffle.\n"
-        "- Australian English spelling.\n"
-        "- No bullet points, no lists, no headings, no sign-off.\n\n"
-        f"Today's top stories:\n{stories_text}\n\n"
-        "Write only the paragraph."
+        f"Today is {today}. Here are the top news stories:\n\n"
+        f"{stories_text}\n\n"
+        "Write a 2-3 sentence intro paragraph for a morning news email. "
+        "Mention 3-4 of these stories by name. Be direct and punchy — "
+        "like a colleague giving you a 10-second briefing. "
+        "No greeting. No sign-off. Just the paragraph."
     )
 
     try:
@@ -88,6 +89,7 @@ def fetch_intro(
             model=MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
+                system_instruction=system,
                 max_output_tokens=300,
                 temperature=0.4,
             ),
@@ -140,7 +142,7 @@ def _fetch_topic(
 
 def _parse_response(response, topic_name: str) -> list[Story]:
     """Extract the JSON stories array from the Gemini response text."""
-    raw = getattr(response, "text", None)
+    raw = _extract_model_text(response)
     if not raw:
         logger.warning(f"Empty response for {topic_name}")
         return []
@@ -163,12 +165,38 @@ def _parse_response(response, topic_name: str) -> list[Story]:
                 headline=item.get("headline", "Untitled"),
                 summary=item.get("summary", ""),
                 source_name=item.get("source_name", ""),
-                source_url=item.get("source_url", ""),
+                source_url="",  # always use grounding URLs, model URLs are unreliable
                 importance=item.get("importance", "medium"),
                 topic=topic_name,
             )
         )
     return stories
+
+
+def _extract_model_text(response) -> str:
+    """Extract only the model-generated text from a Gemini response.
+
+    Gemini with grounding returns multiple parts — some are search snippets.
+    We want only the text parts that contain our JSON.
+    """
+    try:
+        parts = response.candidates[0].content.parts
+        texts = []
+        for part in parts:
+            if hasattr(part, "text") and part.text:
+                texts.append(part.text)
+        if texts:
+            # Find the part that looks like JSON (contains "stories")
+            for text in texts:
+                if '"stories"' in text:
+                    return text
+            # Fallback: concatenate all text parts
+            return "\n".join(texts)
+    except (AttributeError, IndexError):
+        pass
+
+    # Final fallback: response.text
+    return getattr(response, "text", None) or ""
 
 
 def _safe_json_loads(raw: str, topic_name: str) -> dict | None:
@@ -187,7 +215,7 @@ def _safe_json_loads(raw: str, topic_name: str) -> dict | None:
         except json.JSONDecodeError:
             pass
 
-    logger.error(f"Failed to parse JSON for {topic_name}: {raw[:200]}")
+    logger.error(f"Failed to parse JSON for {topic_name}: {raw[:500]}")
     return None
 
 
@@ -209,12 +237,42 @@ def _extract_grounding_urls(response) -> dict[str, str]:
 
 
 def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str]) -> None:
-    """Fill in missing source URLs using grounding metadata."""
+    """Fill in source URLs from grounding metadata.
+
+    Model-generated URLs are unreliable (often hallucinated), so we always
+    prefer grounding metadata. Match by source name or headline keywords.
+    """
+    if not grounding_urls:
+        return
+
+    url_list = list(grounding_urls.items())
+
     for story in stories:
-        if story.source_url:
-            continue
-        for title, url in grounding_urls.items():
-            if (story.headline.lower()[:30] in title.lower()
-                    or story.source_name.lower() in title.lower()):
-                story.source_url = url
-                break
+        # Try matching by source name in the grounding title
+        source_lower = story.source_name.lower()
+        headline_words = set(story.headline.lower().split())
+        # Remove common words for matching
+        headline_words -= {"the", "a", "an", "in", "on", "at", "to", "for", "of", "and", "is", "are", "was"}
+
+        best_url = ""
+        best_score = 0
+
+        for title, url in url_list:
+            title_lower = title.lower()
+            score = 0
+
+            # Source name match (strong signal)
+            if source_lower and source_lower in title_lower:
+                score += 3
+
+            # Count headline word matches
+            title_words = set(title_lower.split())
+            overlap = headline_words & title_words
+            score += len(overlap)
+
+            if score > best_score:
+                best_score = score
+                best_url = url
+
+        if best_url and best_score >= 2:
+            story.source_url = best_url
