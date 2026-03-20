@@ -175,13 +175,13 @@ def _render_top_stories(top: list[Story]) -> str:
 
     parts: list[str] = []
     for story in top:
-        link = _source_link(story, font_size=13)
+        headline_html = _headline_link(story, font_size=16)
         parts.append(
             f'<div style="margin-bottom:14px;">'
             f'<p style="margin:0 0 4px; font-size:16px; font-weight:600; '
-            f'color:#1a1a2e;">{_esc(story.headline)}</p>'
+            f'color:#1a1a2e;">{headline_html}</p>'
             f'<p style="margin:0; font-size:14px; color:#444; line-height:1.4;">'
-            f"{_esc(story.summary)}{link}</p>"
+            f"{_esc(story.summary)}</p>"
             f"</div>"
         )
     return "\n              ".join(parts)
@@ -207,13 +207,13 @@ def _build_topic_sections(
         else:
             story_parts: list[str] = []
             for story in filtered:
-                link = _source_link(story, font_size=12)
+                headline_html = _headline_link(story, font_size=15)
                 story_parts.append(
                     f'<div style="margin-bottom:12px;">'
                     f'<p style="margin:0 0 2px; font-size:15px; font-weight:600; '
-                    f'color:#1a1a2e;">{_esc(story.headline)}</p>'
+                    f'color:#1a1a2e;">{headline_html}</p>'
                     f'<p style="margin:0; font-size:13px; color:#444; '
-                    f'line-height:1.4;">{_esc(story.summary)}{link}</p>'
+                    f'line-height:1.4;">{_esc(story.summary)}</p>'
                     f"</div>"
                 )
             body = "\n              ".join(story_parts)
@@ -231,15 +231,15 @@ def _build_topic_sections(
     return "\n".join(sections)
 
 
-def _source_link(story: Story, font_size: int = 12) -> str:
-    """Build an HTML source link, or empty string if no URL."""
+def _headline_link(story: Story, font_size: int = 15) -> str:
+    """Render headline as a link if URL exists, otherwise plain text."""
+    escaped = _esc(story.headline)
     if not story.source_url:
-        return ""
-    label = _esc(story.source_name) if story.source_name else "Source"
+        return escaped
     return (
-        f' <a href="{_esc(story.source_url)}" '
-        f'style="color:#2a6496; text-decoration:none; font-size:{font_size}px;">'
-        f"[{label}]</a>"
+        f'<a href="{_esc(story.source_url)}" '
+        f'style="color:#1a1a2e; text-decoration:none; font-size:{font_size}px;">'
+        f"{escaped}</a>"
     )
 
 

@@ -157,7 +157,7 @@ TOPICS = [
             "'[team name] match result', '[team name] news'. "
             "Find match results, upcoming fixtures, transfers, selections, or injury news. "
             "Sport doesn't happen every day — include the most recent news up to 48 hours old. "
-            "Return 2-3 stories per team."
+            "Return no more than 5 stories total across all three teams."
         ),
         max_uses=7,
     ),

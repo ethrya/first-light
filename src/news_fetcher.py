@@ -90,7 +90,7 @@ def fetch_intro(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system,
-                max_output_tokens=300,
+                max_output_tokens=500,
                 temperature=0.4,
             ),
         )
