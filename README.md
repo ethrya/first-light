@@ -16,14 +16,15 @@ First Light uses the Gemini API with Google Search grounding to find and summari
 
 ## Setup
 
-### 1. Get a Google AI Studio API key
+### 1. Get a Google Cloud API key
 
-1. Go to [aistudio.google.com](https://aistudio.google.com/)
-2. Sign in with your Google account
-3. Click **Get API key** > **Create API key**
-4. Copy the key (starts with `AIza`) — you'll need it below
+1. Go to [console.cloud.google.com](https://console.cloud.google.com/)
+2. Select or create a project
+3. Enable the **Generative Language API** (APIs & Services → Enable APIs → search "Generative Language")
+4. Go to **APIs & Services → Credentials → Create Credentials → API key**
+5. Copy the key — you'll need it below
 
-Google AI Studio has a free tier. At current usage (~24 searches/day, well under the 5,000 free grounding queries/month), the cost is roughly **$1/month** in token charges.
+At current usage (~24 searches/day, well under the 5,000 free grounding queries/month), the cost is roughly **$1/month** in token charges.
 
 ### 2. Create a Gmail App Password
 
