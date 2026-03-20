@@ -15,8 +15,10 @@ def build_email_html(
 ) -> str:
     """Build the complete HTML email."""
     intro_html = _build_intro(intro)
-    top_stories_html = _build_top_stories(stories_by_topic)
-    topic_sections_html = _build_topic_sections(stories_by_topic)
+    top = _select_top_stories(stories_by_topic)
+    top_headlines = {s.headline for s in top}
+    top_stories_html = _render_top_stories(top)
+    topic_sections_html = _build_topic_sections(stories_by_topic, exclude=top_headlines)
 
     return f"""\
 <!DOCTYPE html>
@@ -95,6 +97,7 @@ def build_plain_text(
 
     # Top stories
     top = _select_top_stories(stories_by_topic)
+    top_headlines = {s.headline for s in top}
     if top:
         lines.append("TOP STORIES")
         lines.append("-" * 11)
@@ -106,14 +109,15 @@ def build_plain_text(
             lines.append("")
         lines.append("")
 
-    # Per-topic sections
+    # Per-topic sections (excluding stories already in Top Stories)
     for topic_name, stories in stories_by_topic.items():
+        filtered = [s for s in stories if s.headline not in top_headlines]
         lines.append(topic_name.upper())
         lines.append("-" * len(topic_name))
-        if not stories:
-            lines.append("No stories available today.")
+        if not filtered:
+            lines.append("No additional stories available today.")
         else:
-            for story in stories:
+            for story in filtered:
                 lines.append(f"* {story.headline}")
                 lines.append(f"  {story.summary}")
                 if story.source_url:
@@ -152,19 +156,17 @@ def _build_intro(intro: str) -> str:
 
 
 def _select_top_stories(stories_by_topic: dict[str, list[Story]]) -> list[Story]:
-    """Pick the 3-5 highest-importance stories across all topics."""
+    """Pick the 3 highest-importance stories across all topics."""
     all_stories: list[Story] = []
     for topic_stories in stories_by_topic.values():
         all_stories.extend(topic_stories)
 
     rank = {"high": 0, "medium": 1, "low": 2}
     all_stories.sort(key=lambda s: rank.get(s.importance, 1))
-    return all_stories[:5]
+    return all_stories[:3]
 
 
-def _build_top_stories(stories_by_topic: dict[str, list[Story]]) -> str:
-    top = _select_top_stories(stories_by_topic)
-
+def _render_top_stories(top: list[Story]) -> str:
     if not top:
         return (
             '<p style="color:#666; font-style:italic;">'
@@ -185,21 +187,26 @@ def _build_top_stories(stories_by_topic: dict[str, list[Story]]) -> str:
     return "\n              ".join(parts)
 
 
-def _build_topic_sections(stories_by_topic: dict[str, list[Story]]) -> str:
+def _build_topic_sections(
+    stories_by_topic: dict[str, list[Story]],
+    exclude: set[str] | None = None,
+) -> str:
     sections: list[str] = []
     bg_colours = ["#ffffff", "#f9f9f9"]
+    excluded = exclude or set()
 
     for i, (topic_name, stories) in enumerate(stories_by_topic.items()):
         bg = bg_colours[i % 2]
+        filtered = [s for s in stories if s.headline not in excluded]
 
-        if not stories:
+        if not filtered:
             body = (
                 '<p style="color:#666; font-style:italic;">'
-                "No stories available for this topic today.</p>"
+                "No additional stories available for this topic today.</p>"
             )
         else:
             story_parts: list[str] = []
-            for story in stories:
+            for story in filtered:
                 link = _source_link(story, font_size=12)
                 story_parts.append(
                     f'<div style="margin-bottom:12px;">'

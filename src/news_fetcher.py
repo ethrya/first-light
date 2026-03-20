@@ -1,5 +1,5 @@
 """
-Fetches news for each topic using the Anthropic API with web search.
+Fetches news for each topic using the Gemini API with Google Search grounding.
 Returns structured story data with source links.
 """
 
@@ -8,9 +8,10 @@ import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-import anthropic
+from google import genai
+from google.genai import types
 
-from .config import MODEL, MAX_TOKENS, SYSTEM_PROMPT, TOPICS, USER_LOCATION, Topic
+from .config import MODEL, MAX_OUTPUT_TOKENS, SYSTEM_PROMPT, TOPICS, Topic
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ class Story:
 
 
 def fetch_all_stories(
-    client: anthropic.Anthropic,
+    client: genai.Client,
     today_date: date,
 ) -> dict[str, list[Story]]:
     """Fetch stories for every configured topic.
@@ -47,14 +48,14 @@ def fetch_all_stories(
 
 
 def fetch_intro(
-    client: anthropic.Anthropic,
+    client: genai.Client,
     stories_by_topic: dict[str, list[Story]],
     today: str,
 ) -> str:
     """Generate a short, conversational intro paragraph summarising the top stories.
 
-    Makes a single API call without web search — Claude writes from the story
-    headlines already gathered.  Returns an empty string on failure.
+    Uses Gemini without grounding — writes from headlines already gathered.
+    Returns an empty string on failure.
     """
     all_stories = [s for stories in stories_by_topic.values() for s in stories]
     if not all_stories:
@@ -86,18 +87,18 @@ def fetch_intro(
     )
 
     try:
-        response = client.messages.create(
+        response = client.models.generate_content(
             model=MODEL,
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}],
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=300,
+                temperature=0.4,
+            ),
         )
-        for block in response.content:
-            if getattr(block, "type", None) == "text":
-                return block.text.strip()
-    except anthropic.APIError as exc:
-        logger.error(f"API error generating intro: {exc}")
-    except anthropic.APIConnectionError as exc:
-        logger.error(f"Connection error generating intro: {exc}")
+        if response.text:
+            return response.text.strip()
+    except Exception as exc:
+        logger.error(f"Error generating intro: {exc}")
 
     return ""
 
@@ -108,56 +109,46 @@ def fetch_intro(
 
 
 def _fetch_topic(
-    client: anthropic.Anthropic,
+    client: genai.Client,
     topic: Topic,
     today: str,
     yesterday: str,
 ) -> list[Story]:
-    """Make a single API call with web search for one topic."""
+    """Make a single Gemini API call with Google Search grounding for one topic."""
     system = SYSTEM_PROMPT.format(today=today, yesterday=yesterday)
 
     try:
-        response = client.messages.create(
+        response = client.models.generate_content(
             model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=system,
-            messages=[{"role": "user", "content": topic.prompt}],
-            tools=[
-                {
-                    "type": "web_search_20250305",
-                    "name": "web_search",
-                    "max_uses": topic.max_uses,
-                    "user_location": USER_LOCATION,
-                }
-            ],
+            contents=topic.prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0.1,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
+            ),
         )
-    except anthropic.APIError as exc:
-        logger.error(f"API error fetching {topic.name}: {exc}")
-        return []
-    except anthropic.APIConnectionError as exc:
-        logger.error(f"Connection error fetching {topic.name}: {exc}")
+    except Exception as exc:
+        logger.error(f"Gemini API error fetching {topic.name}: {exc}")
         return []
 
     stories = _parse_response(response, topic.name)
 
-    # Use citation metadata to fill in any missing source URLs
-    citation_urls = _extract_citation_urls(response)
-    _enrich_with_citations(stories, citation_urls)
+    # Supplement missing source URLs from grounding metadata
+    grounding_urls = _extract_grounding_urls(response)
+    _enrich_with_grounding(stories, grounding_urls)
 
     return stories
 
 
 def _parse_response(response, topic_name: str) -> list[Story]:
-    """Extract the JSON stories array from Claude's response."""
-    text_blocks = [
-        block for block in response.content
-        if getattr(block, "type", None) == "text"
-    ]
-    if not text_blocks:
-        logger.warning(f"No text blocks in response for {topic_name}")
+    """Extract the JSON stories array from the Gemini response text."""
+    raw = getattr(response, "text", None)
+    if not raw:
+        logger.warning(f"Empty response for {topic_name}")
         return []
 
-    raw = text_blocks[-1].text.strip()
+    raw = raw.strip()
 
     # Strip markdown code fences if present
     if raw.startswith("```"):
@@ -203,32 +194,30 @@ def _safe_json_loads(raw: str, topic_name: str) -> dict | None:
     return None
 
 
-def _extract_citation_urls(response) -> dict[str, str]:
-    """Walk response content blocks and collect citation URLs.
+def _extract_grounding_urls(response) -> dict[str, str]:
+    """Extract source URLs from Gemini grounding metadata.
 
-    Returns a mapping of title/text snippets → URLs.
+    Returns a mapping of title → URL.
     """
     urls: dict[str, str] = {}
-    for block in response.content:
-        if not hasattr(block, "citations") or not block.citations:
-            continue
-        for cite in block.citations:
-            if hasattr(cite, "url"):
-                if hasattr(cite, "title") and cite.title:
-                    urls[cite.title] = cite.url
-                if hasattr(cite, "cited_text") and cite.cited_text:
-                    urls[cite.cited_text[:60]] = cite.url
+    try:
+        chunks = response.candidates[0].grounding_metadata.grounding_chunks
+        for chunk in (chunks or []):
+            if chunk.web and chunk.web.uri:
+                title = chunk.web.title or ""
+                urls[title] = chunk.web.uri
+    except (AttributeError, IndexError):
+        pass
     return urls
 
 
-def _enrich_with_citations(stories: list[Story], citation_urls: dict[str, str]) -> None:
-    """Fill in missing source URLs using citation metadata."""
+def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str]) -> None:
+    """Fill in missing source URLs using grounding metadata."""
     for story in stories:
         if story.source_url:
             continue
-        for key, url in citation_urls.items():
-            headline_lower = story.headline.lower()
-            if (headline_lower[:30] in key.lower()
-                    or story.source_name.lower() in key.lower()):
+        for title, url in grounding_urls.items():
+            if (story.headline.lower()[:30] in title.lower()
+                    or story.source_name.lower() in title.lower()):
                 story.source_url = url
                 break

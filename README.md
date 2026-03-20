@@ -2,29 +2,32 @@
 
 A daily AI-powered news briefing delivered to your inbox before coffee.
 
-First Light uses the Anthropic API with web search to find and summarise the day's top news, generates a mobile-friendly HTML email, and sends it via Gmail. It runs automatically as a GitHub Actions workflow.
+First Light uses the Gemini API with Google Search grounding to find and summarise the day's top news, generates a mobile-friendly HTML email, and sends it via Gmail. It runs automatically as a GitHub Actions workflow.
 
 ## Topics
-
-The default newsletter covers:
 
 - **Climate Policy & Energy Transition** — Australian and international
 - **AI & Technology** — product launches, research, regulation
 - **Australian Politics & Public Sector** — federal/state government, policy
 - **Top Global Stories** — geopolitics, economics, major world events
 - **Other Top Australian Stories** — business, health, culture, education
+- **Canberra & ACT** — local government, community, infrastructure
 - **Sports** — Middlesbrough FC, Canberra Raiders, Australia men's cricket
 
 ## Setup
 
-### 1. Prerequisites
+### 1. Get a Google AI Studio API key
 
-- An [Anthropic API key](https://console.anthropic.com/)
-- A Gmail account with 2-Factor Authentication enabled
+1. Go to [aistudio.google.com](https://aistudio.google.com/)
+2. Sign in with your Google account
+3. Click **Get API key** > **Create API key**
+4. Copy the key (starts with `AIza`) — you'll need it below
 
-### 2. Create a Google App Password
+Google AI Studio has a free tier. At current usage (~24 searches/day, well under the 5,000 free grounding queries/month), the cost is roughly **$1/month** in token charges.
 
-Google App Passwords let apps sign in to your Gmail without using your main password.
+### 2. Create a Gmail App Password
+
+Gmail App Passwords let apps sign in to your Gmail without using your main password.
 
 1. Go to [myaccount.google.com](https://myaccount.google.com/)
 2. Navigate to **Security** (left sidebar)
@@ -40,7 +43,7 @@ Go to your repository on GitHub, then **Settings > Secrets and variables > Actio
 
 | Secret name | Value |
 |---|---|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key (starts with `sk-ant-`) |
+| `GOOGLE_API_KEY` | Your Google AI Studio API key (starts with `AIza`) |
 | `GMAIL_ADDRESS` | Your Gmail address (e.g. `you@gmail.com`) |
 | `GMAIL_APP_PASSWORD` | The 16-character App Password from step 2 |
 | `RECIPIENT_EMAIL` | Email address to receive the newsletter |
@@ -52,7 +55,7 @@ Push the code to your repository, then trigger a test run:
 1. Go to the **Actions** tab in your GitHub repository
 2. Click **First Light Newsletter** in the left sidebar
 3. Click **Run workflow** > **Run workflow**
-4. Wait for the run to complete (usually 2-3 minutes)
+4. Wait for the run to complete (usually 3-5 minutes)
 5. Check your inbox
 
 ## Customising Topics
@@ -62,8 +65,8 @@ Edit `src/config.py` to change what the newsletter covers. Each topic is a simpl
 ```python
 Topic(
     name="Section Heading in Email",
-    prompt="Instructions for what Claude should search and summarise.",
-    max_uses=4,  # max web searches for this topic (2-5)
+    prompt="Instructions for what Gemini should search and summarise. Be specific about search terms.",
+    max_uses=4,  # informational only; Gemini searches automatically as needed
 ),
 ```
 
@@ -102,9 +105,9 @@ Use [crontab.guru](https://crontab.guru/) to build cron expressions.
 
 ## Cost
 
-Approximately **$12–15 per month** for daily runs:
-- ~25 web searches/day at $0.01/search = ~$0.25/day
-- ~$0.10–0.20/day in API token costs
+Approximately **$1/month** for daily runs:
+- Google Search Grounding: free up to 5,000 queries/month (we use ~720/month)
+- Gemini 3 Flash token costs: ~$0.036/day in input + output tokens
 - Gmail SMTP is free
 
 ## Architecture
@@ -112,7 +115,7 @@ Approximately **$12–15 per month** for daily runs:
 ```
 src/
 ├── config.py          # Topics, model settings, prompts (edit this)
-├── news_fetcher.py    # Anthropic API calls + response parsing
+├── news_fetcher.py    # Gemini API + Google Search grounding
 ├── email_builder.py   # HTML + plain-text email assembly
 ├── email_sender.py    # Gmail SMTP sending
 └── main.py            # Orchestrator: fetch → build → send
@@ -120,7 +123,8 @@ src/
 
 The workflow calls `python -m src.main`, which:
 1. Validates environment variables
-2. Makes one API call per topic (with web search enabled)
+2. Makes one Gemini API call per topic with Google Search grounding
 3. Parses the JSON response and extracts stories with source links
-4. Assembles a mobile-friendly HTML email with a plain-text fallback
-5. Sends via Gmail SMTP
+4. Generates a short conversational intro paragraph from the top headlines
+5. Assembles a mobile-friendly HTML email with a plain-text fallback
+6. Sends via Gmail SMTP

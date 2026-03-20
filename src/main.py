@@ -1,7 +1,7 @@
 """
 First Light Newsletter — main orchestrator.
 
-Fetches news via the Anthropic API, builds an HTML email, and sends it.
+Fetches news via the Gemini API, builds an HTML email, and sends it.
 """
 
 import logging
@@ -9,7 +9,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-import anthropic
+from google import genai
 
 from .config import EMAIL_SUBJECT_TEMPLATE
 from .email_builder import build_email_html, build_plain_text
@@ -37,7 +37,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Validate environment
     # ------------------------------------------------------------------
-    required = ["ANTHROPIC_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD"]
+    required = ["GOOGLE_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD"]
     missing = [v for v in required if not os.environ.get(v)]
     if missing:
         logger.error(f"Missing environment variables: {', '.join(missing)}")
@@ -48,7 +48,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Fetch news (pass date object so fetcher can compute yesterday)
     # ------------------------------------------------------------------
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
     stories_by_topic = fetch_all_stories(client, today_aest)
 
     total = sum(len(s) for s in stories_by_topic.values())
