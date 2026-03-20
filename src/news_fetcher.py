@@ -181,7 +181,7 @@ def _parse_response(response, topic_name: str) -> list[Story]:
                 headline=item.get("headline", "Untitled"),
                 summary=item.get("summary", ""),
                 source_name=item.get("source_name", ""),
-                source_url="",  # always use grounding URLs, model URLs are unreliable
+                source_url=item.get("source_url", ""),  # may be overridden by grounding
                 importance=item.get("importance", "medium"),
                 topic=topic_name,
             )
@@ -315,8 +315,8 @@ def _extract_grounding_urls(response) -> dict[str, str]:
 def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str]) -> None:
     """Fill in source URLs from grounding metadata.
 
-    Model-generated URLs are unreliable (often hallucinated), so we always
-    prefer grounding metadata. Match by source name or headline keywords.
+    Grounding chunk titles are typically just domain names (e.g. 'theguardian.com').
+    We match by normalising the story's source_name to a domain-like string.
     """
     if not grounding_urls:
         logger.warning("No grounding URLs available")
@@ -327,38 +327,36 @@ def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str])
     matched = 0
 
     for story in stories:
-        source_lower = story.source_name.lower()
-        headline_lower = story.headline.lower()
-        headline_words = set(headline_lower.split())
-        headline_words -= {"the", "a", "an", "in", "on", "at", "to", "for", "of",
-                           "and", "is", "are", "was", "has", "have", "as", "by",
-                           "its", "it", "but", "or", "not", "with", "from", "new"}
+        source = story.source_name.lower()
+        # Normalise source name to match domain-style titles
+        # "The Guardian" → "guardian", "SBS News" → "sbs", "ABC News" → "abc"
+        source_norm = (source
+                       .replace("the ", "")
+                       .replace(" news", "")
+                       .replace(" australia", "")
+                       .replace(" ", "")
+                       .strip())
 
         best_url = ""
         best_score = 0
 
         for title, url in url_list:
-            title_lower = title.lower()
+            title_lower = title.lower().replace(".com", "").replace(".au", "").replace(".co.uk", "")
             score = 0
 
-            # Source name match (strong signal)
-            if source_lower and source_lower in title_lower:
+            # Domain-style matching: "theguardian" contains "guardian"
+            if source_norm and (source_norm in title_lower or title_lower in source_norm):
                 score += 3
 
-            # Check if source name appears in URL domain
-            if source_lower and source_lower.replace(" ", "") in url.lower():
-                score += 2
-
-            # Count headline word matches
-            title_words = set(title_lower.split())
-            overlap = headline_words & title_words
-            score += len(overlap)
+            # Also check full source name
+            if source and source in title_lower:
+                score += 3
 
             if score > best_score:
                 best_score = score
                 best_url = url
 
-        if best_url and best_score >= 1:
+        if best_url and best_score >= 3:
             story.source_url = best_url
             matched += 1
 
