@@ -23,7 +23,7 @@ class Topic:
 # ---------------------------------------------------------------------------
 
 MODEL = "gemini-3-flash-preview"
-MAX_OUTPUT_TOKENS = 4096
+MAX_OUTPUT_TOKENS = 8192
 
 # Shared system prompt — {today} and {yesterday} are filled at runtime
 SYSTEM_PROMPT = """\

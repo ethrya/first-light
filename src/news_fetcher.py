@@ -200,13 +200,13 @@ def _extract_model_text(response) -> str:
 
 
 def _safe_json_loads(raw: str, topic_name: str) -> dict | None:
-    """Try to parse JSON, with a fallback that isolates the first JSON object."""
+    """Try to parse JSON, with fallbacks for extraction and truncation repair."""
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
 
-    # Fallback: find the outermost { … }
+    # Fallback 1: find the outermost { … }
     start = raw.find("{")
     end = raw.rfind("}") + 1
     if start >= 0 and end > start:
@@ -215,7 +215,40 @@ def _safe_json_loads(raw: str, topic_name: str) -> dict | None:
         except json.JSONDecodeError:
             pass
 
+    # Fallback 2: truncated JSON — close open brackets and try again
+    if start >= 0:
+        repaired = _repair_truncated_json(raw[start:])
+        if repaired is not None:
+            logger.info(f"Recovered truncated JSON for {topic_name}")
+            return repaired
+
     logger.error(f"Failed to parse JSON for {topic_name}: {raw[:500]}")
+    return None
+
+
+def _repair_truncated_json(raw: str) -> dict | None:
+    """Attempt to repair truncated JSON by closing open structures.
+
+    If the response was cut off mid-JSON (e.g. by max_output_tokens),
+    we find the last complete story object and close the array/object.
+    """
+    # Find the last complete story object (ends with })
+    # Look for "},\n    {" or just "}" followed by incomplete content
+    last_complete = raw.rfind("}")
+    if last_complete < 0:
+        return None
+
+    # Walk backwards to find a position where closing ]} makes valid JSON
+    pos = last_complete
+    while pos > 0:
+        attempt = raw[:pos + 1] + "]}"
+        try:
+            return json.loads(attempt)
+        except json.JSONDecodeError:
+            pass
+        # Try next } backwards
+        pos = raw.rfind("}", 0, pos)
+
     return None
 
 
