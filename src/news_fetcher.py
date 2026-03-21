@@ -106,7 +106,7 @@ def fetch_intro(
             intro_text = (response.text or "").strip()
 
         if intro_text:
-            logger.info(f"Intro generated: {intro_text[:80]}...")
+            logger.info(f"Intro ({len(intro_text)} chars): {intro_text}")
             return intro_text
         else:
             logger.warning("Intro response was empty")
@@ -147,12 +147,10 @@ def _fetch_topic(
 
     stories = _parse_response(response, topic.name)
 
-    # Supplement missing source URLs from grounding metadata
+    # Fill source URLs from grounding metadata
+    _enrich_with_grounding_supports(response, stories)
     grounding_urls = _extract_grounding_urls(response)
-    if grounding_urls:
-        for title, url in list(grounding_urls.items())[:5]:
-            logger.debug(f"  Grounding: {title!r} → {url[:80]}")
-    _enrich_with_grounding(stories, grounding_urls)
+    _enrich_with_grounding_domain(stories, grounding_urls)
 
     return stories
 
@@ -313,24 +311,89 @@ def _extract_grounding_urls(response) -> dict[str, str]:
     return urls
 
 
-def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str]) -> None:
-    """Fill in source URLs from grounding metadata.
+def _enrich_with_grounding_supports(response, stories: list[Story]) -> None:
+    """Map stories to URLs using grounding_supports segment data.
 
-    Grounding chunk titles are typically just domain names (e.g. 'theguardian.com').
-    We match by normalising the story's source_name to a domain-like string.
+    grounding_supports maps segments of response text to specific grounding
+    chunk indices. We match story headlines/summaries to these segments to
+    find the correct URL for each story.
+    """
+    try:
+        metadata = response.candidates[0].grounding_metadata
+        if not metadata:
+            return
+
+        chunks = getattr(metadata, "grounding_chunks", None) or []
+        supports = getattr(metadata, "grounding_supports", None) or []
+
+        if not chunks or not supports:
+            return
+
+        # Build list of (segment_text, url) from supports
+        segment_urls: list[tuple[str, str]] = []
+        for support in supports:
+            segment = getattr(support, "segment", None)
+            seg_text = getattr(segment, "text", "") if segment else ""
+            indices = getattr(support, "grounding_chunk_indices", []) or []
+
+            for idx in indices:
+                if idx < len(chunks):
+                    chunk = chunks[idx]
+                    if hasattr(chunk, "web") and chunk.web and chunk.web.uri:
+                        segment_urls.append((seg_text.lower(), chunk.web.uri))
+
+        if not segment_urls:
+            return
+
+        matched = 0
+        for story in stories:
+            if story.source_url:  # already has a URL
+                continue
+
+            headline_lower = story.headline.lower()
+            # Check which segments contain words from this story's headline
+            headline_words = set(headline_lower.split()) - {
+                "the", "a", "an", "in", "on", "at", "to", "for", "of", "and",
+                "is", "are", "was", "has", "as", "by", "with", "from", "new",
+            }
+
+            best_url = ""
+            best_overlap = 0
+
+            for seg_text, url in segment_urls:
+                seg_words = set(seg_text.split())
+                overlap = len(headline_words & seg_words)
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_url = url
+
+            if best_url and best_overlap >= 2:
+                story.source_url = best_url
+                matched += 1
+
+        if matched:
+            logger.info(f"  Supports matched {matched} stories with URLs")
+
+    except (AttributeError, IndexError) as exc:
+        logger.debug(f"  Error in grounding_supports: {exc}")
+
+
+def _enrich_with_grounding_domain(stories: list[Story], grounding_urls: dict[str, str]) -> None:
+    """Fallback: match stories to grounding URLs by source name → domain.
+
+    Only applies to stories that don't already have a URL from supports matching.
     """
     if not grounding_urls:
-        logger.warning("No grounding URLs available")
         return
 
-    logger.info(f"Grounding URLs available: {len(grounding_urls)}")
     url_list = list(grounding_urls.items())
     matched = 0
 
     for story in stories:
+        if story.source_url:
+            continue
+
         source = story.source_name.lower()
-        # Normalise source name to match domain-style titles
-        # "The Guardian" → "guardian", "SBS News" → "sbs", "ABC News" → "abc"
         source_norm = (source
                        .replace("the ", "")
                        .replace(" news", "")
@@ -338,27 +401,13 @@ def _enrich_with_grounding(stories: list[Story], grounding_urls: dict[str, str])
                        .replace(" ", "")
                        .strip())
 
-        best_url = ""
-        best_score = 0
-
         for title, url in url_list:
-            title_lower = title.lower().replace(".com", "").replace(".au", "").replace(".co.uk", "")
-            score = 0
+            title_lower = title.lower().replace(".com", "").replace(".au", "").replace(".co.uk", "").replace(".org", "")
 
-            # Domain-style matching: "theguardian" contains "guardian"
             if source_norm and (source_norm in title_lower or title_lower in source_norm):
-                score += 3
+                story.source_url = url
+                matched += 1
+                break
 
-            # Also check full source name
-            if source and source in title_lower:
-                score += 3
-
-            if score > best_score:
-                best_score = score
-                best_url = url
-
-        if best_url and best_score >= 3:
-            story.source_url = best_url
-            matched += 1
-
-    logger.info(f"Matched {matched}/{len(stories)} stories with grounding URLs")
+    total_with_urls = sum(1 for s in stories if s.source_url)
+    logger.info(f"  URLs: {total_with_urls}/{len(stories)} stories have links")
