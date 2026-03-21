@@ -94,19 +94,23 @@ def fetch_intro(
                 temperature=0.4,
             ),
         )
-        # Extract text from all parts (model may split across multiple parts)
-        intro_text = ""
+        # Log finish reason to diagnose truncation
         try:
-            parts_text = []
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "text") and part.text:
-                    parts_text.append(part.text)
-            intro_text = " ".join(parts_text).strip()
+            finish = response.candidates[0].finish_reason
+            logger.info(f"Intro finish_reason: {finish}")
         except (AttributeError, IndexError):
-            intro_text = (response.text or "").strip()
+            pass
+
+        intro_text = (response.text or "").strip()
 
         if intro_text:
             logger.info(f"Intro ({len(intro_text)} chars): {intro_text}")
+            # If truncated (no period at end), try to salvage
+            if intro_text and not intro_text.endswith((".", "!", "?")):
+                last_period = intro_text.rfind(".")
+                if last_period > 0:
+                    intro_text = intro_text[:last_period + 1]
+                    logger.info(f"Trimmed to last complete sentence ({len(intro_text)} chars)")
             return intro_text
         else:
             logger.warning("Intro response was empty")
