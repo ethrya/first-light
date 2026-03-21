@@ -90,7 +90,7 @@ def fetch_intro(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system,
-                max_output_tokens=500,
+                max_output_tokens=2048,
                 temperature=0.4,
             ),
         )
@@ -350,23 +350,26 @@ def _enrich_with_grounding_supports(response, stories: list[Story]) -> None:
             return
 
         matched = 0
+        stop_words = {
+            "the", "a", "an", "in", "on", "at", "to", "for", "of", "and",
+            "is", "are", "was", "has", "as", "by", "with", "from", "new",
+            "its", "it", "be", "but", "or", "not", "up", "out", "over",
+        }
+
         for story in stories:
             if story.source_url:  # already has a URL
                 continue
 
-            headline_lower = story.headline.lower()
-            # Check which segments contain words from this story's headline
-            headline_words = set(headline_lower.split()) - {
-                "the", "a", "an", "in", "on", "at", "to", "for", "of", "and",
-                "is", "are", "was", "has", "as", "by", "with", "from", "new",
-            }
+            # Use both headline and summary words for matching
+            text_lower = f"{story.headline} {story.summary}".lower()
+            content_words = set(text_lower.split()) - stop_words
 
             best_url = ""
             best_overlap = 0
 
             for seg_text, url in segment_urls:
                 seg_words = set(seg_text.split())
-                overlap = len(headline_words & seg_words)
+                overlap = len(content_words & seg_words)
                 if overlap > best_overlap:
                     best_overlap = overlap
                     best_url = url
@@ -393,11 +396,47 @@ def _enrich_with_grounding_domain(stories: list[Story], grounding_urls: dict[str
     url_list = list(grounding_urls.items())
     matched = 0
 
+    # Common aliases: source_name → domain fragment
+    aliases = {
+        "abc": "abc.net",
+        "abc news": "abc.net",
+        "sbs": "sbs.com",
+        "sbs news": "sbs.com",
+        "guardian": "theguardian",
+        "the guardian": "theguardian",
+        "bbc": "bbc.co",
+        "bbc news": "bbc.co",
+        "reuters": "reuters.com",
+        "ap": "apnews",
+        "associated press": "apnews",
+        "smh": "smh.com",
+        "sydney morning herald": "smh.com",
+        "the age": "theage.com",
+        "afr": "afr.com",
+        "financial review": "afr.com",
+        "canberra times": "canberratimes",
+        "riotact": "riotact",
+        "nine": "9news",
+        "nine news": "9news",
+        "seven": "7news",
+        "seven news": "7news",
+        "fox sports": "foxsports",
+        "espn": "espn",
+        "nrl": "nrl.com",
+        "cricket australia": "cricket.com.au",
+        "nca newswire": "news.com",
+    }
+
     for story in stories:
         if story.source_url:
             continue
 
-        source = story.source_name.lower()
+        source = story.source_name.lower().strip()
+
+        # Try alias mapping first
+        alias_match = aliases.get(source, "")
+
+        # Normalised source for fuzzy matching
         source_norm = (source
                        .replace("the ", "")
                        .replace(" news", "")
@@ -406,9 +445,14 @@ def _enrich_with_grounding_domain(stories: list[Story], grounding_urls: dict[str
                        .strip())
 
         for title, url in url_list:
-            title_lower = title.lower().replace(".com", "").replace(".au", "").replace(".co.uk", "").replace(".org", "")
+            title_lower = title.lower()
+            domain = title_lower.replace(".com", "").replace(".au", "").replace(".co.uk", "").replace(".org", "").replace(".net", "")
 
-            if source_norm and (source_norm in title_lower or title_lower in source_norm):
+            if alias_match and alias_match in title_lower:
+                story.source_url = url
+                matched += 1
+                break
+            elif source_norm and (source_norm in domain or domain in source_norm):
                 story.source_url = url
                 matched += 1
                 break
