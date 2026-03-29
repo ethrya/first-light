@@ -75,7 +75,7 @@ def fetch_watch_today(
                     system_instruction=system,
                     tools=[types.Tool(google_search=types.GoogleSearch())],
                     temperature=0.1,
-                    max_output_tokens=2048,
+                    max_output_tokens=8192,
                 ),
             )
             logger.info(f"Watch Today: using model {model}")
@@ -138,7 +138,10 @@ def _parse_items(raw: str) -> list:
     start = raw.find("{")
     end = raw.rfind("}") + 1
     if start < 0 or end <= start:
-        logger.warning(f"Watch Today: no JSON found in response: {raw[:200]}")
+        logger.warning(
+            f"Watch Today: no JSON found in response "
+            f"(len={len(raw)}): {raw[:300]}"
+        )
         return []
 
     try:
