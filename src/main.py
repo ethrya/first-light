@@ -1,7 +1,7 @@
 """
 First Light Newsletter — main orchestrator.
 
-Fetches news via the Gemini API, builds an HTML email, and sends it.
+Fetches RSS feeds, curates stories with Gemini, builds an HTML email, and sends it.
 """
 
 import logging
@@ -11,10 +11,13 @@ from datetime import datetime, timedelta, timezone
 
 from google import genai
 
-from .config import EMAIL_SUBJECT_TEMPLATE
+from .config import EMAIL_SUBJECT_TEMPLATE, TOPICS
+from .dedup import dedup_raw_articles, dedup_stories
 from .email_builder import build_email_html, build_plain_text
 from .email_sender import send_newsletter
-from .news_fetcher import fetch_all_stories, fetch_intro
+from .feeds import FEEDS
+from .news_fetcher import curate_all_stories, fetch_intro
+from .rss_fetcher import fetch_rss_articles
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,25 +49,52 @@ def main() -> None:
     recipient = os.environ.get("RECIPIENT_EMAIL", "ethanryan9@gmail.com")
 
     # ------------------------------------------------------------------
-    # Fetch news (pass date object so fetcher can compute yesterday)
+    # Step 1: Fetch RSS feeds
+    # ------------------------------------------------------------------
+    logger.info("Fetching RSS feeds...")
+    articles_by_topic = {}
+    for topic in TOPICS:
+        feed_urls = FEEDS.get(topic.name, [])
+        if feed_urls:
+            raw = fetch_rss_articles(topic.name, feed_urls)
+            articles_by_topic[topic.name] = dedup_raw_articles(raw)
+        else:
+            articles_by_topic[topic.name] = []
+            logger.warning(f"  No feeds configured for {topic.name}")
+
+    total_articles = sum(len(a) for a in articles_by_topic.values())
+    logger.info(f"Total RSS articles after dedup: {total_articles}")
+
+    # ------------------------------------------------------------------
+    # Step 2: Curate with Gemini (includes grounding fallback)
     # ------------------------------------------------------------------
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-    stories_by_topic = fetch_all_stories(client, today_aest)
-
-    total = sum(len(s) for s in stories_by_topic.values())
-    logger.info(f"Total stories fetched: {total}")
-
-    if total == 0:
-        logger.warning("No stories fetched for any topic. Sending minimal newsletter.")
+    stories_by_topic = curate_all_stories(client, today_aest, articles_by_topic)
 
     # ------------------------------------------------------------------
-    # Generate intro paragraph from gathered headlines
+    # Step 3: Cross-topic deduplication
+    # ------------------------------------------------------------------
+    all_stories = [s for sl in stories_by_topic.values() for s in sl]
+    deduped = dedup_stories(all_stories)
+    # Rebuild dict preserving topic order from TOPICS
+    stories_by_topic = {}
+    for s in deduped:
+        stories_by_topic.setdefault(s.topic, []).append(s)
+
+    total = sum(len(s) for s in stories_by_topic.values())
+    logger.info(f"Total curated stories after dedup: {total}")
+
+    if total == 0:
+        logger.warning("No stories after curation. Sending minimal newsletter.")
+
+    # ------------------------------------------------------------------
+    # Step 4: Generate intro paragraph
     # ------------------------------------------------------------------
     logger.info("Generating intro paragraph")
     intro = fetch_intro(client, stories_by_topic, today_long)
 
     # ------------------------------------------------------------------
-    # Build and send email
+    # Step 5: Build and send email
     # ------------------------------------------------------------------
     html_body = build_email_html(stories_by_topic, today_long, intro=intro)
     plain_body = build_plain_text(stories_by_topic, today_long, intro=intro)
