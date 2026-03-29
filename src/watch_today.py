@@ -19,6 +19,14 @@ from .config import GEMINI_MODEL, WATCH_TODAY_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
+# Try these models in order — first one that doesn't 404 wins
+_MODEL_CANDIDATES = [
+    GEMINI_MODEL,
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-2.5-pro-exp-03-25",
+]
+
 # Category display labels and ordering
 _CATEGORY_LABELS: dict = {
     "economy":    "Economy",
@@ -55,19 +63,30 @@ def fetch_watch_today(
         "political speeches or press conferences."
     )
 
-    try:
-        response = gemini_client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=search_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.1,
-                max_output_tokens=2048,
-            ),
-        )
-    except Exception as exc:
-        logger.warning(f"Watch Today grounding failed: {exc}")
+    response = None
+    for model in _MODEL_CANDIDATES:
+        try:
+            response = gemini_client.models.generate_content(
+                model=model,
+                contents=search_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    temperature=0.1,
+                    max_output_tokens=2048,
+                ),
+            )
+            logger.info(f"Watch Today: using model {model}")
+            break
+        except Exception as exc:
+            if "404" in str(exc) or "NOT_FOUND" in str(exc):
+                logger.debug(f"Watch Today: model {model} unavailable, trying next")
+                continue
+            logger.warning(f"Watch Today grounding failed: {exc}")
+            return []
+
+    if response is None:
+        logger.warning("Watch Today: no available Gemini model found")
         return []
 
     raw = _extract_text(response)

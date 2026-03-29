@@ -27,7 +27,7 @@ class Topic:
 # Gemini API settings (grounding fallback only)
 # ---------------------------------------------------------------------------
 
-GEMINI_MODEL = "gemini-2.0-flash-lite"
+GEMINI_MODEL = "gemini-1.5-flash"
 
 # ---------------------------------------------------------------------------
 # Claude API settings
