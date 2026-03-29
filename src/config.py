@@ -66,9 +66,10 @@ STORY TIERS — assign every story a tier:
 Reserve for stories that are genuinely consequential, surprising, or both.
 - Tier 2 (main stories per section): 2 sentences. Informative with a touch \
 of perspective. The backbone of each section.
-- Tier 3 (minor/remaining): One sentence maximum. \
-Claude writes the complete sentence — headline embedded in the prose. \
-E.g. "Victoria scrapped free fares on regional trains, citing budget pressures. — Herald Sun"
+- Tier 3 (minor/remaining): Brief item. Always include a headline field. \
+The summary is one sentence maximum. \
+E.g. headline: "Victoria scraps free regional rail fares", \
+summary: "Citing budget pressures, the state government has ended the scheme. — Herald Sun"
 
 INTRO: 2-4 sentences. Genuine editorial voice. Connect themes across topics \
 where real threads exist. Do NOT stitch three headlines together. \
@@ -132,11 +133,87 @@ The importance field must be one of: "high", "medium", "low".
 Return ONLY valid JSON. No markdown fencing, no commentary outside the JSON.\
 """
 
+# System prompt for the "What to Watch Today" grounding search
+WATCH_TODAY_SYSTEM_PROMPT = """\
+You are a daily briefing researcher. Search the web to find what is \
+SCHEDULED or CONFIRMED to happen in Australia today ({today}).
+
+Only include items that are definitively happening today — not speculation, \
+not yesterday's results, not general background.
+
+Search for:
+1. ECONOMY: RBA interest rate decision (if today is a board meeting day), \
+ABS data releases (employment, CPI, GDP, retail trade, housing), \
+Treasury/budget announcements
+2. PARLIAMENT: Federal parliament sitting (House or Senate), Senate estimates
+3. CABINET: National Cabinet or federal cabinet meetings
+4. SPORT: Today's fixtures for Canberra Raiders (NRL), Australia men's \
+cricket (any format), Middlesbrough FC (English Championship)
+5. OTHER: Scheduled speeches or press conferences by PM, Treasurer, \
+RBA Governor
+
+Return valid JSON only — no markdown fencing, no commentary:
+{{
+  "items": [
+    {{
+      "category": "economy|parliament|cabinet|sport|other",
+      "title": "Short title (e.g. \\"ABS Labour Force data\\" or \\"Raiders v Broncos\\")",
+      "detail": "One sentence — what it is and why it matters",
+      "time": "Time in AEST if known, otherwise empty string"
+    }}
+  ]
+}}
+
+If nothing confirmed for a category, omit it entirely.
+If nothing found at all, return {{"items": []}}.
+Return ONLY valid JSON.\
+"""
+
 # ---------------------------------------------------------------------------
 # Topics — edit this list to change newsletter sections
 # ---------------------------------------------------------------------------
 
 TOPICS = [
+    Topic(
+        name="Other Top Australian Stories",
+        display_name="Australia",
+        max_stories=4,
+        prompt=(
+            "Economics, business, health, culture, education. Exclude "
+            "climate/energy, AI/tech, and politics covered in other sections."
+        ),
+    ),
+    Topic(
+        name="Australian Politics & Public Sector",
+        display_name="Australian Politics",
+        max_stories=4,
+        prompt=(
+            "Federal and state decisions affecting everyday Australians, "
+            "parliamentary developments, public service news. "
+            "Skip routine press releases and minor political bickering."
+        ),
+    ),
+    Topic(
+        name="Canberra & ACT",
+        display_name="Canberra",
+        max_stories=5,
+        prompt=(
+            "ACT government decisions, local politics, community issues, "
+            "infrastructure, housing, cost of living. The reader lives and "
+            "works in Canberra — this section should feel substantial."
+        ),
+        use_grounding_fallback=True,
+    ),
+    Topic(
+        name="Top Global Stories",
+        display_name="Global",
+        max_stories=4,
+        prompt=(
+            "Geopolitics, economics, conflict, diplomacy. Exclude climate, "
+            "AI, and Australian politics already covered above. "
+            "Prefer stories with Asia-Pacific relevance."
+        ),
+    ),
     Topic(
         name="Climate Policy & Energy Transition",
         display_name="Climate & Energy",
@@ -156,45 +233,6 @@ TOPICS = [
             "policy, major funding or acquisitions, security incidents. "
             "Skip minor app updates and routine corporate earnings."
         ),
-    ),
-    Topic(
-        name="Australian Politics & Public Sector",
-        display_name="Australian Politics",
-        max_stories=4,
-        prompt=(
-            "Federal and state decisions affecting everyday Australians, "
-            "parliamentary developments, public service news. "
-            "Skip routine press releases and minor political bickering."
-        ),
-    ),
-    Topic(
-        name="Top Global Stories",
-        display_name="Global",
-        max_stories=4,
-        prompt=(
-            "Geopolitics, economics, conflict, diplomacy. Exclude climate, "
-            "AI, and Australian politics already covered above. "
-            "Prefer stories with Asia-Pacific relevance."
-        ),
-    ),
-    Topic(
-        name="Other Top Australian Stories",
-        display_name="Australia",
-        max_stories=3,
-        prompt=(
-            "Economics, business, health, culture, education. Exclude "
-            "climate/energy, AI/tech, and politics already covered above."
-        ),
-    ),
-    Topic(
-        name="Canberra & ACT",
-        display_name="Canberra",
-        max_stories=3,
-        prompt=(
-            "ACT government decisions, local politics, community issues, "
-            "infrastructure, housing, cost of living."
-        ),
-        use_grounding_fallback=True,
     ),
     Topic(
         name="Sports",

@@ -9,6 +9,7 @@ from typing import Optional
 
 from .config import TOPICS
 from .news_fetcher import Story
+from .watch_today import WatchItem, _CATEGORY_LABELS
 
 _TOPIC_DISPLAY: dict = {t.name: t.display_name or t.name for t in TOPICS}
 
@@ -19,9 +20,11 @@ def build_email_html(
     intro: str = "",
     weather: str = "",
     also_interesting: Optional[Story] = None,
+    watch_today: Optional[list] = None,
 ) -> str:
     """Build the complete HTML email."""
     intro_html = _build_intro(intro)
+    watch_today_html = _build_watch_today(watch_today or [])
     topic_sections_html = _build_topic_sections(stories_by_topic)
     also_interesting_html = _build_also_interesting(also_interesting)
     weather_html = (
@@ -63,6 +66,8 @@ def build_email_html(
 
           <!-- Intro paragraph -->
 {intro_html}
+          <!-- What to Watch Today -->
+{watch_today_html}
           <!-- Topic Sections -->
 {topic_sections_html}
 
@@ -92,6 +97,7 @@ def build_plain_text(
     intro: str = "",
     weather: str = "",
     also_interesting: Optional[Story] = None,
+    watch_today: Optional[list] = None,
 ) -> str:
     """Build a plain-text version for email clients that don't render HTML."""
     lines = [f"FIRST LIGHT \u2014 {today_str}"]
@@ -101,6 +107,17 @@ def build_plain_text(
 
     if intro:
         lines += [intro, ""]
+
+    if watch_today:
+        lines.append("WHAT TO WATCH TODAY")
+        lines.append("-" * 19)
+        for item in watch_today:
+            label = _CATEGORY_LABELS.get(item.category, item.category.title())
+            time_str = f" ({item.time})" if item.time else ""
+            lines.append(f"[{label}] {item.title}{time_str}")
+            if item.detail:
+                lines.append(f"  {item.detail}")
+        lines += ["", ""]
 
     # Per-topic sections in TOPICS order
     for topic in TOPICS:
@@ -142,6 +159,51 @@ def build_plain_text(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_watch_today(items: list) -> str:
+    """Render the What to Watch Today section, or empty string if no items."""
+    if not items:
+        return ""
+
+    rows: list = []
+    for item in items:
+        label = _CATEGORY_LABELS.get(item.category, item.category.title())
+        time_str = (
+            f' <span style="color:#888; font-size:11px;">({_esc(item.time)})</span>'
+            if item.time else ""
+        )
+        detail_html = (
+            f'<span style="color:#555; font-size:12px;"> \u2014 {_esc(item.detail)}</span>'
+            if item.detail else ""
+        )
+        rows.append(
+            f'<tr>'
+            f'<td style="padding:3px 8px 3px 0; vertical-align:top; white-space:nowrap;">'
+            f'<span style="font-size:11px; font-weight:700; color:#ffffff; '
+            f'background-color:#1a1a2e; padding:2px 6px; border-radius:3px; '
+            f'letter-spacing:0.5px; text-transform:uppercase;">'
+            f'{_esc(label)}</span></td>'
+            f'<td style="padding:3px 0; font-size:13px; color:#1a1a2e; line-height:1.4;">'
+            f'<strong>{_esc(item.title)}</strong>{time_str}{detail_html}</td>'
+            f'</tr>'
+        )
+
+    rows_html = "\n                ".join(rows)
+    return (
+        "          <tr>\n"
+        "            <td style=\"padding:16px 24px 8px; background-color:#f0f4ff; "
+        "border-bottom:1px solid #dde4f0;\">\n"
+        "              <p style=\"margin:0 0 10px; font-size:13px; font-weight:700; "
+        "color:#1a1a2e; letter-spacing:0.8px; text-transform:uppercase;\">"
+        "What to Watch Today</p>\n"
+        "              <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" "
+        "style=\"width:100%;\">\n"
+        f"                {rows_html}\n"
+        "              </table>\n"
+        "            </td>\n"
+        "          </tr>\n"
+    )
 
 
 def _build_intro(intro: str) -> str:
@@ -237,12 +299,16 @@ def _render_tier2(story: Story) -> str:
 
 
 def _render_tier3(story: Story) -> str:
-    """Tier 3: brief. One sentence, no separate headline element."""
+    """Tier 3: brief. Bold headline + one-sentence summary."""
+    headline_html = _headline_link(story, font_size=14)
     source_tag = _source_tag(story, font_size=12)
     return (
-        f'<p style="margin:0 0 8px; font-size:13px; color:#555; '
-        f'line-height:1.4;">'
+        f'<div style="margin-bottom:10px;">'
+        f'<p style="margin:0 0 1px; font-size:14px; font-weight:600; '
+        f'color:#1a1a2e;">{headline_html}</p>'
+        f'<p style="margin:0; font-size:13px; color:#555; line-height:1.4;">'
         f"{_esc(story.summary)}{source_tag}</p>"
+        f"</div>"
     )
 
 
