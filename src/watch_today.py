@@ -19,12 +19,14 @@ from .config import GEMINI_MODEL, WATCH_TODAY_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-# Try these models in order — first one that doesn't 404 wins
+# Try these models in order — first one that works wins.
+# gemini-1.5-flash supports google_search_retrieval (not google_search tool).
+# gemini-2.x / 2.5.x use types.Tool(google_search=...) — try those first.
 _MODEL_CANDIDATES = [
     GEMINI_MODEL,
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
     "gemini-2.5-pro-exp-03-25",
+    "gemini-3-flash-preview",
+    "gemini-2.0-flash-exp",
 ]
 
 # Category display labels and ordering
@@ -79,10 +81,10 @@ def fetch_watch_today(
             logger.info(f"Watch Today: using model {model}")
             break
         except Exception as exc:
-            if "404" in str(exc) or "NOT_FOUND" in str(exc):
-                logger.debug(f"Watch Today: model {model} unavailable, trying next")
+            if "404" in str(exc) or "NOT_FOUND" in str(exc) or "deprecated" in str(exc).lower():
+                logger.info(f"Watch Today: model {model} unavailable ({exc}), trying next")
                 continue
-            logger.warning(f"Watch Today grounding failed: {exc}")
+            logger.warning(f"Watch Today grounding failed on {model}: {exc}")
             return []
 
     if response is None:
