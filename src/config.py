@@ -145,12 +145,23 @@ Search for:
 1. ECONOMY: RBA interest rate decision (if today is a board meeting day), \
 ABS data releases (employment, CPI, GDP, retail trade, housing), \
 Treasury/budget announcements
-2. PARLIAMENT: Federal parliament sitting (House or Senate), Senate estimates
-3. CABINET: National Cabinet or federal cabinet meetings
+2. PARLIAMENT: Is federal parliament sitting today? If yes, return ONE single \
+item with category "parliament", title "Parliament sitting", and a detail field \
+that lists everything happening today — chambers sitting, Senate estimates \
+committees, major bills being debated, question time — all in one sentence \
+separated by semicolons. Do NOT return separate items for each parliamentary \
+activity. If parliament is not sitting, omit this category entirely.
+3. CABINET: National Cabinet or federal cabinet meetings. This is HIGH PRIORITY \
+— always search explicitly for "National Cabinet meeting {today}" and \
+"federal cabinet {today}". If a National Cabinet meeting is scheduled today, \
+include it as a "cabinet" category item.
 4. SPORT: Today's fixtures for Canberra Raiders (NRL), Australia men's \
-cricket (any format), Middlesbrough FC (English Championship)
-5. OTHER: Scheduled speeches or press conferences by PM, Treasurer, \
-RBA Governor
+cricket (any format), Middlesbrough FC (English Championship). One item per \
+match/fixture.
+5. OTHER: Scheduled speeches or press conferences by PM, Treasurer, or \
+RBA Governor. Also include any other significant scheduled Australian \
+government, institutional, or major public events today that don't fit the \
+above categories.
 
 Return valid JSON only — no markdown fencing, no commentary:
 {{
