@@ -67,6 +67,26 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
+def _clean_source_name(title: str) -> str:
+    """Strip junk from RSS feed titles to get a clean source name.
+
+    Handles patterns like:
+      "AI (artificial intelligence) | The Guardian" → "The Guardian"
+      "Teesside Live | All About Boro" → "Teesside Live"  (shorter part wins)
+      "News — South China Morning Post" → "South China Morning Post"
+      "News - Reuters" → "Reuters"
+    """
+    if " | " in title:
+        parts = title.split(" | ", 1)
+        a, b = parts[0].strip(), parts[1].strip()
+        return a if len(a) <= len(b) else b
+    if " \u2014 " in title:  # em dash
+        return title.split(" \u2014 ", 1)[1].strip()
+    if " - " in title:
+        return title.split(" - ", 1)[1].strip()
+    return title.strip()
+
+
 def _parse_feed(
     url: str,
     topic_name: str,
@@ -78,7 +98,8 @@ def _parse_feed(
     if feed.bozo and not feed.entries:
         raise ValueError(f"unparseable feed: {feed.bozo_exception}")
 
-    feed_title = getattr(feed.feed, "title", None) or _domain_from_url(url)
+    raw_title = getattr(feed.feed, "title", None) or _domain_from_url(url)
+    feed_title = _clean_source_name(raw_title)
     results: list[RawArticle] = []
 
     for entry in feed.entries:

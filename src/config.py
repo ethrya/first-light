@@ -4,8 +4,10 @@ First Light Newsletter Configuration
 Edit the TOPICS list below to add, remove, or reorder newsletter sections.
 Each topic needs:
   - name: Section heading in the email (must match key in feeds.py)
-  - prompt: Curation instructions — tells Gemini how to select and rank stories
-  - use_grounding_fallback: If True, also searches Google when RSS is thin
+  - display_name: Short header used in the email (e.g. "Climate & Energy")
+  - prompt: Editorial angle guidance for Claude
+  - use_grounding_fallback: If True, Gemini searches Google when RSS is thin
+  - max_stories: Story cap passed to Claude as editorial guidance
 """
 
 from dataclasses import dataclass, field
@@ -17,25 +19,36 @@ class Topic:
     prompt: str
     use_grounding_fallback: bool = False
     cutoff_hours: int = 36  # how far back to look in RSS feeds
+    display_name: str = ""  # short section header in email
+    max_stories: int = 4    # cap passed to Claude in editorial guidance
 
 
 # ---------------------------------------------------------------------------
-# Gemini API settings
+# Gemini API settings (grounding fallback only)
 # ---------------------------------------------------------------------------
 
-MODEL = "gemini-3-flash-preview"
-MAX_OUTPUT_TOKENS = 8192
+GEMINI_MODEL = "gemini-2.0-flash"
 
-# System prompt for curation — Gemini selects and rewrites from an RSS pool.
-# {today} and {yesterday} are filled at runtime.
-CURATION_SYSTEM_PROMPT = """\
-You are a news editor for "First Light", a daily email newsletter read by an \
-Australian professional in Canberra. You are given a pool of raw news articles \
-fetched from RSS feeds. Your job is to select the most important stories and \
-write sharp summaries for each.
+# ---------------------------------------------------------------------------
+# Claude API settings
+# ---------------------------------------------------------------------------
 
-Use Australian English spelling throughout (e.g. "labour", "organisation", \
-"programme", "analysed"). Today is {today}. Yesterday was {yesterday}.
+CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MAX_TOKENS = 8192
+
+CLAUDE_CURATION_SYSTEM_PROMPT = """\
+You are the editor of "First Light", a daily morning newsletter read by an \
+Australian professional in Canberra. Your voice is dry, precise, and \
+occasionally wry — the tone of a senior policy professional who reads widely \
+and writes well. Australian English throughout.
+
+BANNED PHRASES — never use these:
+"in a move that", "amid growing concerns", "raises questions about", \
+"in a significant development", "it remains to be seen", "going forward", \
+"at the end of the day", "a number of", "landmark", "historic", "bombshell"
+
+VARY SENTENCE LENGTH. Connect threads between stories when there's a genuine \
+link — don't force it.
 
 WHAT MAKES A STORY WORTH INCLUDING:
 - Impactful: affects many people or has real-world consequences
@@ -43,45 +56,40 @@ WHAT MAKES A STORY WORTH INCLUDING:
 - Surprising: unexpected, counterintuitive, or breaks from the norm
 - Relevant to Australian context: prioritise stories with an Australian angle \
 or direct implications for Australia
-- Interesting: compelling human stories, notable firsts, or stories that spark \
+- Interesting: compelling human stories, notable firsts, stories that spark \
 conversation
-Prefer stories that combine several of these qualities. Skip routine \
-announcements, incremental updates, or rehashed wire copy.
+Prefer stories that combine several of these qualities.
 
-WRITING STYLE:
-- Write punchy, direct summaries. 1-2 sentences max — no filler, no fluff.
-- Lead with what happened. Add why it matters only if it's not obvious.
-- Use short sentences. Prefer active voice. Cut unnecessary words.
-- Headlines should be sharp and specific — not vague or generic.
-- Write like a newsroom wire, not an essay.
+STORY TIERS — assign every story a tier:
+- Tier 1 (2-3 stories TOTAL across ALL sections): Must-read stories. \
+3-4 sentences. Give texture and voice. Connect to broader context. \
+Reserve for stories that are genuinely consequential, surprising, or both.
+- Tier 2 (main stories per section): 2 sentences. Informative with a touch \
+of perspective. The backbone of each section.
+- Tier 3 (minor/remaining): One sentence maximum. \
+Claude writes the complete sentence — headline embedded in the prose. \
+E.g. "Victoria scrapped free fares on regional trains, citing budget pressures. — Herald Sun"
+
+INTRO: 2-4 sentences. Genuine editorial voice. Connect themes across topics \
+where real threads exist. Do NOT stitch three headlines together. \
+This is a paragraph that gives the reader a sense of what kind of morning it is.
+
+ALSO INTERESTING: Pick one story from anywhere in the pool that is \
+surprising, human, or memorable — the kind of thing a reader forwards to \
+a friend. 2-3 sentences with slightly more colour than a Tier 2 story. \
+It should feel like a reward at the end.
 
 CRITICAL RULES:
-- You MUST copy source_url and source_name EXACTLY from the article pool. \
-Do not invent, modify, or guess URLs. Use the URL from the numbered article.
-- Do NOT include duplicate or near-duplicate stories. If multiple articles \
-cover the same event, pick the single best one.
-- Aim for the target number of stories specified in the topic prompt. Only \
-return fewer if the pool genuinely doesn't have enough noteworthy material \
-— not every article needs to be extraordinary, just worth a reader's time.
-- Return ONLY valid JSON with this exact structure:
-
-{{
-  "stories": [
-    {{
-      "headline": "Short, punchy headline",
-      "summary": "1-2 sentence summary. Direct and factual.",
-      "source_name": "Copied from article pool",
-      "source_url": "Copied from article pool",
-      "importance": "high"
-    }}
-  ]
-}}
-
-The importance field must be one of: "high", "medium", "low".
-Return ONLY valid JSON. No markdown fencing, no commentary outside the JSON.\
+- Reference stories by their input_index (the number in square brackets).
+- Copy source_url and source_name VERBATIM from the article pool. \
+Do not invent, shorten, or modify URLs.
+- If a story has no URL in the pool, do not invent one — omit source_url.
+- Do not include duplicate or near-duplicate stories across sections.
+- Return ONLY valid JSON matching the schema in the user message. \
+No markdown fencing, no commentary outside the JSON.\
 """
 
-# System prompt for grounding fallback (Canberra & Sports only)
+# System prompt for grounding fallback (Canberra & Sports only) — unchanged
 GROUNDING_SYSTEM_PROMPT = """\
 You are a news researcher for a daily email newsletter called "First Light", \
 read by an Australian professional in Canberra. \
@@ -131,84 +139,74 @@ Return ONLY valid JSON. No markdown fencing, no commentary outside the JSON.\
 TOPICS = [
     Topic(
         name="Climate Policy & Energy Transition",
+        display_name="Climate & Energy",
+        max_stories=4,
         prompt=(
-            "Select 3-5 of the most important stories about climate policy and "
-            "energy transition. Prefer Australian climate and energy stories, but "
-            "include major international developments (new targets, landmark rulings, "
-            "significant investment or divestment, breakthrough technology). "
-            "Exclude routine weather stories unless they're record-breaking.\n\n"
-            "ARTICLE POOL:\n{articles}"
+            "Australian climate and energy policy, major international climate "
+            "targets, significant investment or divestment, breakthrough "
+            "technology. Exclude routine weather unless record-breaking."
         ),
     ),
     Topic(
         name="AI & Technology",
+        display_name="AI & Tech",
+        max_stories=4,
         prompt=(
-            "Select 3-5 of the most important stories about artificial intelligence "
-            "and technology. Prioritise product launches with broad impact, major "
-            "research breakthroughs, regulation and policy, significant funding or "
-            "acquisitions, and security incidents. Skip routine corporate earnings "
-            "and minor app updates.\n\n"
-            "ARTICLE POOL:\n{articles}"
+            "Broad-impact AI launches, research breakthroughs, regulation and "
+            "policy, major funding or acquisitions, security incidents. "
+            "Skip minor app updates and routine corporate earnings."
         ),
     ),
     Topic(
         name="Australian Politics & Public Sector",
+        display_name="Australian Politics",
+        max_stories=4,
         prompt=(
-            "Select 3-5 of the most important Australian politics and public "
-            "sector stories. Cover federal and state government decisions, policy "
-            "announcements, parliamentary developments, and public service news. "
-            "Prioritise decisions that affect everyday Australians. Skip minor "
-            "political bickering or routine press releases.\n\n"
-            "ARTICLE POOL:\n{articles}"
+            "Federal and state decisions affecting everyday Australians, "
+            "parliamentary developments, public service news. "
+            "Skip routine press releases and minor political bickering."
         ),
     ),
     Topic(
         name="Top Global Stories",
+        display_name="Global",
+        max_stories=4,
         prompt=(
-            "Select 3-5 of the most important international news stories. "
-            "Cover geopolitics, economics, conflict, diplomacy, and major world "
-            "events. Exclude stories already covered under climate, AI, or "
-            "Australian politics. Prefer stories with implications for the "
-            "Asia-Pacific region or Australia.\n\n"
-            "ARTICLE POOL:\n{articles}"
+            "Geopolitics, economics, conflict, diplomacy. Exclude climate, "
+            "AI, and Australian politics already covered above. "
+            "Prefer stories with Asia-Pacific relevance."
         ),
     ),
     Topic(
         name="Other Top Australian Stories",
+        display_name="Australia",
+        max_stories=3,
         prompt=(
-            "Select 3-5 significant Australian news stories that don't fit "
-            "under climate/energy, AI/tech, or politics/public sector. "
-            "Cover economics, business, health, culture, education, sport, "
-            "or social issues. Prioritise stories with real impact or wide "
-            "interest.\n\n"
-            "ARTICLE POOL:\n{articles}"
+            "Economics, business, health, culture, education. Exclude "
+            "climate/energy, AI/tech, and politics already covered above."
         ),
     ),
     Topic(
         name="Canberra & ACT",
+        display_name="Canberra",
+        max_stories=3,
         prompt=(
-            "Select 2-4 local Canberra and ACT news stories. Include ACT "
-            "government decisions, local politics, community issues, "
-            "infrastructure, housing, cost of living, and local events. "
-            "Prioritise stories that directly affect Canberra residents.\n\n"
-            "ARTICLE POOL:\n{articles}"
+            "ACT government decisions, local politics, community issues, "
+            "infrastructure, housing, cost of living."
         ),
         use_grounding_fallback=True,
     ),
     Topic(
         name="Sports",
+        display_name="Sports",
+        max_stories=3,
         prompt=(
-            "Select up to 5 stories total about these three teams/sports: "
-            "1) Middlesbrough FC (English Championship football), "
-            "2) Canberra Raiders (NRL rugby league), "
-            "3) Australia's men's cricket team. "
-            "Include match results, upcoming fixtures, transfers, selections, "
-            "or injury news. If a team hasn't played recently, it's fine to "
-            "include fewer stories.\n\n"
-            "ARTICLE POOL:\n{articles}"
+            "Boro FC (English Championship), Canberra Raiders (NRL), "
+            "Australia men's cricket. Match results, fixtures, transfers, "
+            "selections, injuries."
         ),
         use_grounding_fallback=True,
-        cutoff_hours=48,  # sport doesn't happen daily; look back further
+        cutoff_hours=48,
     ),
 ]
 
@@ -216,4 +214,4 @@ TOPICS = [
 # Email settings
 # ---------------------------------------------------------------------------
 
-EMAIL_SUBJECT_TEMPLATE = "First Light \u2014 {date}"
+EMAIL_SUBJECT_TEMPLATE = "\u2600 First Light \u2014 {day} {date}"

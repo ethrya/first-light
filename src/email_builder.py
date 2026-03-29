@@ -5,22 +5,30 @@ All CSS is inline for email client compatibility (Outlook, Gmail, Apple Mail).
 Layout uses tables for maximum cross-client support.
 """
 
-from typing import Optional, Set
+from typing import Optional
 
+from .config import TOPICS
 from .news_fetcher import Story
+
+_TOPIC_DISPLAY: dict = {t.name: t.display_name or t.name for t in TOPICS}
 
 
 def build_email_html(
-    stories_by_topic: dict[str, list[Story]],
+    stories_by_topic: dict,
     today_str: str,
     intro: str = "",
+    weather: str = "",
+    also_interesting: Optional[Story] = None,
 ) -> str:
     """Build the complete HTML email."""
     intro_html = _build_intro(intro)
-    top = _select_top_stories(stories_by_topic)
-    top_headlines = {s.headline for s in top}
-    top_stories_html = _render_top_stories(top)
-    topic_sections_html = _build_topic_sections(stories_by_topic, exclude=top_headlines)
+    topic_sections_html = _build_topic_sections(stories_by_topic)
+    also_interesting_html = _build_also_interesting(also_interesting)
+    weather_html = (
+        f'<p style="margin:4px 0 0; color:#aaaaaa; font-size:12px;">'
+        f"{_esc(weather)}</p>"
+        if weather else ""
+    )
 
     return f"""\
 <!DOCTYPE html>
@@ -49,30 +57,22 @@ def build_email_html(
               <p style="margin:8px 0 0; color:#cccccc; font-size:14px;">
                 {_esc(today_str)}
               </p>
+              {weather_html}
             </td>
           </tr>
 
           <!-- Intro paragraph -->
 {intro_html}
-          <!-- Top Stories -->
-          <tr>
-            <td style="padding:24px 24px 20px;">
-              <h2 style="margin:0 0 16px; color:#1a1a2e; font-size:20px;
-                         border-bottom:2px solid #f0c040; padding-bottom:8px;">
-                Top Stories
-              </h2>
-              {top_stories_html}
-            </td>
-          </tr>
-
           <!-- Topic Sections -->
 {topic_sections_html}
 
+          <!-- Also Interesting -->
+{also_interesting_html}
           <!-- Footer -->
           <tr>
             <td style="background-color:#1a1a2e; padding:20px 24px; text-align:center;">
               <p style="margin:0; color:#888888; font-size:12px;">
-                First Light is generated daily using AI-powered news search.
+                First Light is generated daily using AI-powered news curation.
                 Always verify important stories with original sources.
               </p>
             </td>
@@ -87,39 +87,34 @@ def build_email_html(
 
 
 def build_plain_text(
-    stories_by_topic: dict[str, list[Story]],
+    stories_by_topic: dict,
     today_str: str,
     intro: str = "",
+    weather: str = "",
+    also_interesting: Optional[Story] = None,
 ) -> str:
     """Build a plain-text version for email clients that don't render HTML."""
-    lines = [f"FIRST LIGHT \u2014 {today_str}", "=" * 40, ""]
+    lines = [f"FIRST LIGHT \u2014 {today_str}"]
+    if weather:
+        lines.append(weather)
+    lines += ["=" * 40, ""]
 
     if intro:
         lines += [intro, ""]
 
-    # Top stories
-    top = _select_top_stories(stories_by_topic)
-    top_headlines = {s.headline for s in top}
-    if top:
-        lines.append("TOP STORIES")
-        lines.append("-" * 11)
-        for story in top:
-            lines.append(f"* {story.headline}")
-            lines.append(f"  {story.summary}")
-            if story.source_url:
-                lines.append(f"  {story.source_url}")
-            lines.append("")
-        lines.append("")
-
-    # Per-topic sections (excluding stories already in Top Stories)
-    for topic_name, stories in stories_by_topic.items():
-        filtered = [s for s in stories if s.headline not in top_headlines]
-        lines.append(topic_name.upper())
-        lines.append("-" * len(topic_name))
-        if not filtered:
-            lines.append("No additional stories available today.")
+    # Per-topic sections in TOPICS order
+    for topic in TOPICS:
+        topic_name = topic.name
+        if topic_name not in stories_by_topic:
+            continue
+        stories = stories_by_topic[topic_name]
+        display = _TOPIC_DISPLAY.get(topic_name, topic_name)
+        lines.append(display.upper())
+        lines.append("-" * len(display))
+        if not stories:
+            lines.append("No stories available today.")
         else:
-            for story in filtered:
+            for story in stories:
                 lines.append(f"* {story.headline}")
                 lines.append(f"  {story.summary}")
                 if story.source_url:
@@ -127,9 +122,18 @@ def build_plain_text(
                 lines.append("")
         lines.append("")
 
+    if also_interesting:
+        lines.append("ALSO INTERESTING")
+        lines.append("-" * 16)
+        lines.append(f"* {also_interesting.headline}")
+        lines.append(f"  {also_interesting.summary}")
+        if also_interesting.source_url:
+            lines.append(f"  {also_interesting.source_url}")
+        lines += ["", ""]
+
     lines.append("---")
     lines.append(
-        "First Light is generated daily using AI-powered news search. "
+        "First Light is generated daily using AI-powered news curation. "
         "Always verify important stories with original sources."
     )
     return "\n".join(lines)
@@ -157,82 +161,112 @@ def _build_intro(intro: str) -> str:
     )
 
 
-def _select_top_stories(stories_by_topic: dict[str, list[Story]]) -> list[Story]:
-    """Pick the 3 highest-importance stories across all topics."""
-    all_stories: list[Story] = []
-    for topic_stories in stories_by_topic.values():
-        all_stories.extend(topic_stories)
-
-    rank = {"high": 0, "medium": 1, "low": 2}
-    all_stories.sort(key=lambda s: rank.get(s.importance, 1))
-    return all_stories[:3]
-
-
-def _render_top_stories(top: list[Story]) -> str:
-    if not top:
-        return (
-            '<p style="color:#666; font-style:italic;">'
-            "No top stories available today.</p>"
-        )
-
-    parts: list[str] = []
-    for story in top:
-        headline_html = _headline_link(story, font_size=16)
-        source_tag = _source_tag(story, font_size=13)
-        parts.append(
-            f'<div style="margin-bottom:14px;">'
-            f'<p style="margin:0 0 4px; font-size:16px; font-weight:600; '
-            f'color:#1a1a2e;">{headline_html}</p>'
-            f'<p style="margin:0; font-size:14px; color:#444; line-height:1.4;">'
-            f"{_esc(story.summary)}{source_tag}</p>"
-            f"</div>"
-        )
-    return "\n              ".join(parts)
-
-
-def _build_topic_sections(
-    stories_by_topic: dict[str, list[Story]],
-    exclude: Optional[Set[str]] = None,
-) -> str:
-    sections: list[str] = []
+def _build_topic_sections(stories_by_topic: dict) -> str:
+    sections: list = []
     bg_colours = ["#ffffff", "#f9f9f9"]
-    excluded = exclude or set()
 
-    for i, (topic_name, stories) in enumerate(stories_by_topic.items()):
+    for i, topic in enumerate(TOPICS):
+        topic_name = topic.name
+        if topic_name not in stories_by_topic:
+            continue
+        stories = stories_by_topic[topic_name]
+        display_name = _TOPIC_DISPLAY.get(topic_name, topic_name)
         bg = bg_colours[i % 2]
-        filtered = [s for s in stories if s.headline not in excluded]
 
-        if not filtered:
+        if not stories:
             body = (
                 '<p style="color:#666; font-style:italic;">'
-                "No additional stories available for this topic today.</p>"
+                "No stories available for this topic today.</p>"
             )
         else:
-            story_parts: list[str] = []
-            for story in filtered:
-                headline_html = _headline_link(story, font_size=15)
-                source_tag = _source_tag(story, font_size=12)
-                story_parts.append(
-                    f'<div style="margin-bottom:12px;">'
-                    f'<p style="margin:0 0 2px; font-size:15px; font-weight:600; '
-                    f'color:#1a1a2e;">{headline_html}</p>'
-                    f'<p style="margin:0; font-size:13px; color:#444; '
-                    f'line-height:1.4;">{_esc(story.summary)}{source_tag}</p>'
-                    f"</div>"
-                )
+            story_parts: list = []
+            for story in stories:
+                story_parts.append(_render_story(story))
             body = "\n              ".join(story_parts)
 
         sections.append(
-            f'          <tr>\n'
-            f'            <td style="padding:20px 24px; background-color:{bg};">\n'
-            f'              <h2 style="margin:0 0 12px; color:#1a1a2e; font-size:18px; '
-            f'border-bottom:1px solid #ddd; padding-bottom:6px;">'
-            f"{_esc(topic_name)}</h2>\n"
+            f"          <tr>\n"
+            f"            <td style=\"padding:20px 24px; background-color:{bg};\">\n"
+            f"              <h2 style=\"margin:0 0 12px; color:#1a1a2e; font-size:18px; "
+            f"border-bottom:1px solid #ddd; padding-bottom:6px;\">"
+            f"{_esc(display_name)}</h2>\n"
             f"              {body}\n"
             f"            </td>\n"
             f"          </tr>"
         )
     return "\n".join(sections)
+
+
+def _render_story(story: Story) -> str:
+    """Render a single story according to its tier."""
+    if story.tier == 1:
+        return _render_tier1(story)
+    elif story.tier == 3:
+        return _render_tier3(story)
+    else:
+        return _render_tier2(story)
+
+
+def _render_tier1(story: Story) -> str:
+    """Tier 1: must-read. Gold left border, larger text."""
+    headline_html = _headline_link(story, font_size=16)
+    source_tag = _source_tag(story, font_size=13)
+    return (
+        f'<div style="margin-bottom:16px; border-left:3px solid #f0c040; '
+        f'padding-left:10px;">'
+        f'<p style="margin:0 0 4px; font-size:16px; font-weight:600; '
+        f'color:#1a1a2e;">{headline_html}</p>'
+        f'<p style="margin:0; font-size:15px; color:#333; line-height:1.65;">'
+        f"{_esc(story.summary)}{source_tag}</p>"
+        f"</div>"
+    )
+
+
+def _render_tier2(story: Story) -> str:
+    """Tier 2: main story. Standard styling."""
+    headline_html = _headline_link(story, font_size=15)
+    source_tag = _source_tag(story, font_size=12)
+    return (
+        f'<div style="margin-bottom:12px;">'
+        f'<p style="margin:0 0 2px; font-size:15px; font-weight:600; '
+        f'color:#1a1a2e;">{headline_html}</p>'
+        f'<p style="margin:0; font-size:13px; color:#444; line-height:1.4;">'
+        f"{_esc(story.summary)}{source_tag}</p>"
+        f"</div>"
+    )
+
+
+def _render_tier3(story: Story) -> str:
+    """Tier 3: brief. One sentence, no separate headline element."""
+    source_tag = _source_tag(story, font_size=12)
+    return (
+        f'<p style="margin:0 0 8px; font-size:13px; color:#555; '
+        f'line-height:1.4;">'
+        f"{_esc(story.summary)}{source_tag}</p>"
+    )
+
+
+def _build_also_interesting(story: Optional[Story]) -> str:
+    """Render the Also Interesting section, or empty string if no story."""
+    if not story:
+        return ""
+    headline_html = _headline_link(story, font_size=15)
+    source_tag = _source_tag(story, font_size=12)
+    return (
+        "          <tr>\n"
+        "            <td style=\"padding:20px 24px; background-color:#f5f0e8;\">\n"
+        "              <h2 style=\"margin:0 0 12px; color:#1a1a2e; font-size:18px; "
+        "font-style:italic; border-bottom:1px solid #ddd; padding-bottom:6px;\">"
+        "Also Interesting</h2>\n"
+        f"              <div style=\"margin-bottom:12px;\">\n"
+        f"                <p style=\"margin:0 0 2px; font-size:15px; font-weight:600; "
+        f"color:#1a1a2e;\">{headline_html}</p>\n"
+        f"                <p style=\"margin:0; font-size:13px; color:#444; "
+        f"line-height:1.4;\">{_esc(story.summary)}{source_tag}</p>\n"
+        f"              </div>\n"
+        "            </td>\n"
+        "          </tr>\n"
+    )
 
 
 def _headline_link(story: Story, font_size: int = 15) -> str:
@@ -252,10 +286,9 @@ def _source_tag(story: Story, font_size: int = 12) -> str:
     if not story.source_name:
         return ""
     label = _esc(story.source_name)
-    # If no URL, just show source name in grey
     return (
         f' <span style="color:#888; font-size:{font_size}px;">'
-        f"— {label}</span>"
+        f"\u2014 {label}</span>"
     )
 
 

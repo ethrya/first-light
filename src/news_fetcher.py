@@ -1,28 +1,34 @@
 """
-Curates news stories using Gemini from a pre-fetched RSS article pool.
+Curates news stories using Claude as the primary editorial engine.
 
-For most topics, Gemini receives RSS articles and selects/summarises the best.
-For topics with use_grounding_fallback=True, Gemini also searches Google
-when RSS coverage is thin.
+Claude receives the full RSS article pool and returns a complete newsletter
+structure in one call: intro, tiered stories per section, and an
+"Also Interesting" pick.
+
+For topics with use_grounding_fallback=True (Canberra & Sports), Gemini
+grounded search supplements thin RSS coverage before sending to Claude.
 """
 
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+import anthropic
 from google import genai
 from google.genai import types
 
 from .config import (
-    MODEL,
-    MAX_OUTPUT_TOKENS,
-    CURATION_SYSTEM_PROMPT,
+    CLAUDE_MODEL,
+    CLAUDE_MAX_TOKENS,
+    CLAUDE_CURATION_SYSTEM_PROMPT,
+    GEMINI_MODEL,
     GROUNDING_SYSTEM_PROMPT,
     TOPICS,
     Topic,
 )
+from .dedup import dedup_raw_articles
 from .rss_fetcher import RawArticle
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,7 @@ class Story:
     source_url: str
     importance: str  # "high", "medium", "low"
     topic: str
+    tier: int = 2   # 1=must-read, 2=main, 3=brief
 
 
 # ---------------------------------------------------------------------------
@@ -43,192 +50,257 @@ class Story:
 # ---------------------------------------------------------------------------
 
 
-def curate_all_stories(
-    client: genai.Client,
+def curate_with_claude(
+    anthropic_client: anthropic.Anthropic,
+    articles_by_topic: dict,
     today_date: date,
-    articles_by_topic: dict[str, list[RawArticle]],
-) -> dict[str, list[Story]]:
-    """Curate stories for every configured topic.
+    gemini_client: genai.Client,
+) -> tuple:
+    """Curate the full newsletter with a single Claude API call.
 
-    For each topic, sends the RSS article pool to Gemini for curation.
-    For fallback topics with thin results, also runs a grounded search.
+    Returns (stories_by_topic, intro_text, also_interesting_story).
     """
     today = today_date.strftime("%A, %-d %B %Y")
     yesterday = (today_date - timedelta(days=1)).strftime("%A, %-d %B %Y")
 
-    results: dict[str, list[Story]] = {}
+    # ------------------------------------------------------------------
+    # Step 1: Grounding fallback for thin topics
+    # ------------------------------------------------------------------
     for topic in TOPICS:
-        articles = articles_by_topic.get(topic.name, [])
-        logger.info(f"Curating: {topic.name} ({len(articles)} RSS articles)")
-
-        stories = _curate_topic(client, topic, today, yesterday, articles)
-
-        # Grounding fallback for topics with thin RSS coverage
-        if topic.use_grounding_fallback and len(stories) < 2:
+        if not topic.use_grounding_fallback:
+            continue
+        pool = articles_by_topic.get(topic.name, [])
+        if len(pool) < 2:
             logger.info(
-                f"  Fallback: running grounded search for {topic.name} "
-                f"({len(stories)} stories from RSS)"
+                f"  Grounding fallback for {topic.name} "
+                f"({len(pool)} RSS articles)"
             )
-            existing = [s.headline for s in stories]
             grounded = _fetch_grounded_topic(
-                client, topic, today, yesterday, existing
+                gemini_client, topic, today, yesterday,
+                existing_headlines=[a.title for a in pool],
             )
-            stories.extend(grounded)
+            converted = [
+                _grounded_story_to_raw_article(s, topic.name)
+                for s in grounded
+            ]
+            articles_by_topic[topic.name] = pool + converted
 
-        results[topic.name] = stories
-        logger.info(f"  Got {len(stories)} stories for {topic.name}")
-
-    return results
-
-
-def fetch_intro(
-    client: genai.Client,
-    stories_by_topic: dict[str, list[Story]],
-    today: str,
-) -> str:
-    """Generate a short, conversational intro paragraph summarising the top stories.
-
-    Uses Gemini without grounding — writes from headlines already gathered.
-    Returns an empty string on failure.
-    """
-    all_stories = [s for stories in stories_by_topic.values() for s in stories]
-    if not all_stories:
-        return ""
-
-    rank = {"high": 0, "medium": 1, "low": 2}
-    all_stories.sort(key=lambda s: rank.get(s.importance, 1))
-    top = all_stories[:5]
-
-    stories_text = "\n".join(
-        f"- {s.headline} (section: {s.topic})" for s in top
-    )
-
-    system = (
-        "You are a newsletter writer. Write in Australian English. "
-        "Your output must be ONLY the requested paragraph — no headings, "
-        "no commentary, no meta-text, no bullet points."
-    )
-
-    prompt = (
-        f"Today is {today}. Here are the top news stories:\n\n"
-        f"{stories_text}\n\n"
-        "Write a 2-3 sentence intro paragraph for a morning news email. "
-        "Mention 3-4 of these stories by name. Be direct and punchy — "
-        "like a colleague giving you a 10-second briefing. "
-        "No greeting. No sign-off. Just the paragraph."
-    )
-
-    try:
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                max_output_tokens=2048,
-                temperature=0.4,
-            ),
+    # ------------------------------------------------------------------
+    # Step 2: Dedup merged pool per topic
+    # ------------------------------------------------------------------
+    for topic_name in articles_by_topic:
+        articles_by_topic[topic_name] = dedup_raw_articles(
+            articles_by_topic[topic_name]
         )
-        try:
-            finish = response.candidates[0].finish_reason
-            logger.info(f"Intro finish_reason: {finish}")
-        except (AttributeError, IndexError):
-            pass
 
-        intro_text = (response.text or "").strip()
+    # ------------------------------------------------------------------
+    # Step 3: Build flat article list with input_index
+    # ------------------------------------------------------------------
+    all_articles: list[RawArticle] = []
+    _ARTICLE_CAP = 40  # per topic
 
-        if intro_text:
-            logger.info(f"Intro ({len(intro_text)} chars): {intro_text}")
-            # If truncated (no period at end), try to salvage
-            if not intro_text.endswith((".", "!", "?")):
-                last_period = intro_text.rfind(".")
-                if last_period > 0:
-                    intro_text = intro_text[:last_period + 1]
-                    logger.info(
-                        f"Trimmed to last complete sentence "
-                        f"({len(intro_text)} chars)"
-                    )
-            return intro_text
-        else:
-            logger.warning("Intro response was empty")
+    for topic in TOPICS:
+        pool = articles_by_topic.get(topic.name, [])
+        capped = pool[:_ARTICLE_CAP]
+        all_articles.extend(capped)
+        if len(pool) > _ARTICLE_CAP:
+            logger.info(
+                f"  {topic.name}: capped at {_ARTICLE_CAP} "
+                f"(had {len(pool)})"
+            )
+
+    logger.info(f"  Total articles in Claude pool: {len(all_articles)}")
+
+    # Build lookup: input_index → RawArticle
+    index_map = {i: a for i, a in enumerate(all_articles)}
+
+    # ------------------------------------------------------------------
+    # Step 4: Format user message for Claude
+    # ------------------------------------------------------------------
+    user_message = _build_user_message(all_articles, today)
+
+    # ------------------------------------------------------------------
+    # Step 5: Claude API call
+    # ------------------------------------------------------------------
+    try:
+        message = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=CLAUDE_MAX_TOKENS,
+            system=CLAUDE_CURATION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        raw = message.content[0].text
+        logger.info(
+            f"  Claude response: {len(raw)} chars, "
+            f"stop_reason={message.stop_reason}"
+        )
     except Exception as exc:
-        logger.error(f"Error generating intro: {exc}")
+        logger.error(f"Claude API error: {exc}")
+        return {}, "", None
 
-    return ""
+    # ------------------------------------------------------------------
+    # Step 6: Parse and validate response
+    # ------------------------------------------------------------------
+    data = _safe_json_loads(raw, "Claude curation")
+    if data is None:
+        logger.error("Failed to parse Claude response as JSON")
+        return {}, "", None
+
+    intro = (data.get("intro") or "").strip()
+
+    # Build display_name → canonical topic name map
+    display_to_name = {t.display_name or t.name: t.name for t in TOPICS}
+
+    stories_by_topic: dict = {}
+    tier1_count = 0
+
+    for section in data.get("sections", []):
+        display = section.get("topic", "")
+        topic_name = display_to_name.get(display, display)
+
+        for item in section.get("stories", []):
+            story = _validate_story_item(item, index_map, topic_name)
+            if story is None:
+                continue
+
+            # Enforce Tier 1 cap of 3 across all sections
+            if story.tier == 1:
+                if tier1_count >= 3:
+                    story.tier = 2
+                    story.importance = "medium"
+                else:
+                    tier1_count += 1
+
+            stories_by_topic.setdefault(topic_name, []).append(story)
+
+    # Log tier distribution
+    tier_counts = {1: 0, 2: 0, 3: 0}
+    for stories in stories_by_topic.values():
+        for s in stories:
+            tier_counts[s.tier] = tier_counts.get(s.tier, 0) + 1
+    logger.info(f"  Tier distribution: {tier_counts}")
+
+    # Parse also_interesting
+    also_interesting: Optional[Story] = None
+    ai_item = data.get("also_interesting")
+    if ai_item:
+        also_interesting = _validate_story_item(
+            ai_item, index_map, "also_interesting"
+        )
+        if also_interesting:
+            also_interesting.tier = 2  # render like a Tier 2 story
+
+    return stories_by_topic, intro, also_interesting
 
 
 # ---------------------------------------------------------------------------
-# Curation (RSS → Gemini → Stories)
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 
-def _curate_topic(
-    client: genai.Client,
-    topic: Topic,
-    today: str,
-    yesterday: str,
-    articles: list[RawArticle],
-) -> list[Story]:
-    """Send RSS article pool to Gemini for curation and ranking."""
-    if not articles:
-        logger.info(f"  No RSS articles for {topic.name}, skipping curation")
-        return []
-
-    # Cap at 60 most recent articles — keeps the Gemini prompt manageable
-    # and prevents output truncation from overly long responses
-    pool = articles[:60]
-    article_text = _format_article_pool(pool)
-
-    # Build the valid URL set for validation
-    valid_urls = {a.url for a in pool}
-
-    system = CURATION_SYSTEM_PROMPT.format(today=today, yesterday=yesterday)
-    prompt = topic.prompt.format(articles=article_text)
-
-    try:
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                temperature=0.1,
-                max_output_tokens=MAX_OUTPUT_TOKENS,
-            ),
-        )
-    except Exception as exc:
-        logger.error(f"Gemini API error curating {topic.name}: {exc}")
-        return []
-
-    stories = _parse_response(response, topic.name)
-
-    # Validate URLs — drop stories with missing or unrecognised URLs
-    validated: list[Story] = []
-    for story in stories:
-        if story.source_url and story.source_url in valid_urls:
-            validated.append(story)
-        else:
-            logger.warning(
-                f"  Dropped story (bad URL): {story.headline!r} "
-                f"→ {story.source_url!r}"
-            )
-    logger.info(
-        f"  Curation: {len(validated)}/{len(stories)} stories have valid URLs"
+def _grounded_story_to_raw_article(story: Story, topic_name: str) -> RawArticle:
+    """Convert a Gemini-grounded Story into a RawArticle for the Claude pool."""
+    return RawArticle(
+        title=story.headline,
+        url=story.source_url,
+        source_name=story.source_name,
+        published=datetime.now(timezone.utc),
+        summary=story.summary,
+        topic=topic_name,
     )
-    return validated
 
 
-def _format_article_pool(articles: list[RawArticle]) -> str:
-    """Format articles as a numbered text block for the Gemini prompt."""
-    lines: list[str] = []
-    for i, a in enumerate(articles, 1):
-        pub_str = a.published.strftime("%d %b %Y %H:%M UTC")
-        summary = a.summary[:200] if a.summary else "(no summary)"
+def _build_user_message(all_articles: list, today: str) -> str:
+    """Build the user message for the Claude curation call."""
+    lines: list[str] = [f"Today is {today}.\n"]
+
+    lines.append("ARTICLE POOL:")
+    for i, a in enumerate(all_articles):
+        pub_str = a.published.strftime("%d %b %H:%M UTC")
+        summary = (a.summary[:300] if a.summary else "(no summary)").replace("\n", " ")
         lines.append(
-            f"[{i}] Title: {a.title}\n"
-            f"    Source: {a.source_name} | URL: {a.url}\n"
-            f"    Published: {pub_str}\n"
-            f"    Summary: {summary}"
+            f"\n[{i}] topic=\"{a.topic}\" | {a.source_name} | {pub_str}\n"
+            f"{a.title}\n"
+            f"{a.url}\n"
+            f"{summary}"
         )
-    return "\n\n".join(lines)
+
+    lines.append("\n\nEDITORIAL GUIDANCE PER SECTION:")
+    for topic in TOPICS:
+        dn = topic.display_name or topic.name
+        lines.append(f"- {dn} (max {topic.max_stories}): {topic.prompt}")
+
+    lines.append(
+        "\n\nReturn a JSON object with this exact schema:\n"
+        "{\n"
+        '  "intro": "2-4 sentence editorial intro paragraph",\n'
+        '  "sections": [\n'
+        '    {\n'
+        '      "topic": "<display_name from guidance above>",\n'
+        '      "stories": [\n'
+        '        {\n'
+        '          "input_index": <integer from article pool>,\n'
+        '          "tier": <1, 2, or 3>,\n'
+        '          "headline": "...",\n'
+        '          "summary": "...",\n'
+        '          "source_name": "copied verbatim from pool",\n'
+        '          "source_url": "copied verbatim from pool"\n'
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ],\n"
+        '  "also_interesting": {\n'
+        '    "input_index": <integer>,\n'
+        '    "headline": "...",\n'
+        '    "summary": "...",\n'
+        '    "source_name": "...",\n'
+        '    "source_url": "..."\n'
+        "  }\n"
+        "}\n"
+        "Return ONLY valid JSON. No markdown fencing."
+    )
+
+    return "\n".join(lines)
+
+
+def _validate_story_item(
+    item: dict,
+    index_map: dict,
+    topic_name: str,
+) -> Optional[Story]:
+    """Validate a story item from Claude's response.
+
+    Returns a Story if valid, None if the input_index is invalid.
+    Uses the pool URL as ground truth on URL mismatch (don't drop).
+    """
+    idx = item.get("input_index")
+    if idx is None or idx not in index_map:
+        logger.warning(
+            f"  Dropped story (invalid input_index={idx}): "
+            f"{item.get('headline', '')!r}"
+        )
+        return None
+
+    source_article = index_map[idx]
+    claimed_url = item.get("source_url", "")
+
+    if claimed_url and claimed_url != source_article.url:
+        logger.debug(
+            f"  URL mismatch for [{idx}] — using pool URL as ground truth"
+        )
+
+    tier = max(1, min(3, int(item.get("tier", 2))))
+    importance = "high" if tier == 1 else "medium" if tier == 2 else "low"
+
+    return Story(
+        headline=item.get("headline", source_article.title),
+        summary=item.get("summary", ""),
+        source_name=item.get("source_name") or source_article.source_name,
+        source_url=source_article.url,  # always use pool URL
+        importance=importance,
+        topic=topic_name,
+        tier=tier,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -241,16 +313,15 @@ def _fetch_grounded_topic(
     topic: Topic,
     today: str,
     yesterday: str,
-    existing_headlines: list[str],
-) -> list[Story]:
+    existing_headlines: list,
+) -> list:
     """Search Google via Gemini grounding for a topic, avoiding duplicates.
 
     Stories without a matched grounding URL are dropped.
     """
     system = GROUNDING_SYSTEM_PROMPT.format(today=today, yesterday=yesterday)
 
-    # Build prompt that tells Gemini what we already have
-    prompt_parts = [topic.prompt.split("\n\nARTICLE POOL:")[0]]  # base prompt
+    prompt_parts = [topic.prompt]
     if existing_headlines:
         prompt_parts.append(
             "\n\nI already have these stories from RSS feeds:\n"
@@ -259,7 +330,6 @@ def _fetch_grounded_topic(
         )
     prompt = "\n".join(prompt_parts)
 
-    # For grounded search, we need a search-style prompt
     search_prompt = (
         f"Search for the latest news about {topic.name} published today or "
         f"yesterday. {prompt}"
@@ -267,27 +337,25 @@ def _fetch_grounded_topic(
 
     try:
         response = client.models.generate_content(
-            model=MODEL,
+            model=GEMINI_MODEL,
             contents=search_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system,
                 tools=[types.Tool(google_search=types.GoogleSearch())],
                 temperature=0.1,
-                max_output_tokens=MAX_OUTPUT_TOKENS,
+                max_output_tokens=8192,
             ),
         )
     except Exception as exc:
         logger.error(f"Gemini grounding error for {topic.name}: {exc}")
         return []
 
-    stories = _parse_response(response, topic.name)
+    stories = _parse_grounded_response(response, topic.name)
 
-    # Fill URLs from grounding metadata
     _enrich_with_grounding_supports(response, stories)
     grounding_urls = _extract_grounding_urls(response)
     _enrich_with_grounding_domain(stories, grounding_urls)
 
-    # Drop stories without URLs
     with_urls = [s for s in stories if s.source_url]
     dropped = len(stories) - len(with_urls)
     if dropped:
@@ -299,20 +367,18 @@ def _fetch_grounded_topic(
 
 
 # ---------------------------------------------------------------------------
-# Response parsing (shared by curation and grounding)
+# Response parsing (grounding path)
 # ---------------------------------------------------------------------------
 
 
-def _parse_response(response, topic_name: str) -> list[Story]:
-    """Extract the JSON stories array from the Gemini response text."""
+def _parse_grounded_response(response, topic_name: str) -> list:
+    """Extract the JSON stories array from the Gemini grounding response."""
     raw = _extract_model_text(response)
     if not raw:
-        logger.warning(f"Empty response for {topic_name}")
+        logger.warning(f"Empty grounding response for {topic_name}")
         return []
 
     raw = raw.strip()
-
-    # Strip markdown code fences if present
     if raw.startswith("```"):
         lines = raw.split("\n")
         raw = "\n".join(lines[1:-1]).strip()
@@ -321,7 +387,7 @@ def _parse_response(response, topic_name: str) -> list[Story]:
     if data is None:
         return []
 
-    stories: list[Story] = []
+    stories: list = []
     for item in data.get("stories", []):
         stories.append(
             Story(
@@ -337,11 +403,7 @@ def _parse_response(response, topic_name: str) -> list[Story]:
 
 
 def _extract_model_text(response) -> str:
-    """Extract only the model-generated text from a Gemini response.
-
-    Gemini with grounding returns multiple parts — some are search snippets.
-    We want only the text parts that contain our JSON.
-    """
+    """Extract only the model-generated text from a Gemini response."""
     try:
         parts = response.candidates[0].content.parts
         texts = []
@@ -406,9 +468,9 @@ def _repair_truncated_json(raw: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 
-def _extract_grounding_urls(response) -> dict[str, str]:
+def _extract_grounding_urls(response) -> dict:
     """Extract source URLs from Gemini grounding metadata."""
-    urls: dict[str, str] = {}
+    urls: dict = {}
     try:
         metadata = response.candidates[0].grounding_metadata
         if metadata is None:
@@ -441,9 +503,7 @@ def _extract_grounding_urls(response) -> dict[str, str]:
     return urls
 
 
-def _enrich_with_grounding_supports(
-    response, stories: list[Story]
-) -> None:
+def _enrich_with_grounding_supports(response, stories: list) -> None:
     """Map stories to URLs using grounding_supports segment data."""
     try:
         metadata = response.candidates[0].grounding_metadata
@@ -456,7 +516,7 @@ def _enrich_with_grounding_supports(
         if not chunks or not supports:
             return
 
-        segment_urls: list[tuple[str, str]] = []
+        segment_urls: list = []
         for support in supports:
             segment = getattr(support, "segment", None)
             seg_text = getattr(segment, "text", "") if segment else ""
@@ -504,9 +564,7 @@ def _enrich_with_grounding_supports(
         logger.debug(f"  Error in grounding_supports: {exc}")
 
 
-def _enrich_with_grounding_domain(
-    stories: list[Story], grounding_urls: dict[str, str]
-) -> None:
+def _enrich_with_grounding_domain(stories: list, grounding_urls: dict) -> None:
     """Fallback: match stories to grounding URLs by source name → domain."""
     if not grounding_urls:
         return
