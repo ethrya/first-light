@@ -56,7 +56,9 @@ def main() -> None:
     for topic in TOPICS:
         feed_urls = FEEDS.get(topic.name, [])
         if feed_urls:
-            raw = fetch_rss_articles(topic.name, feed_urls)
+            raw = fetch_rss_articles(
+                topic.name, feed_urls, cutoff_hours=topic.cutoff_hours
+            )
             articles_by_topic[topic.name] = dedup_raw_articles(raw)
         else:
             articles_by_topic[topic.name] = []

@@ -16,6 +16,7 @@ class Topic:
     name: str
     prompt: str
     use_grounding_fallback: bool = False
+    cutoff_hours: int = 36  # how far back to look in RSS feeds
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +208,7 @@ TOPICS = [
             "ARTICLE POOL:\n{articles}"
         ),
         use_grounding_fallback=True,
+        cutoff_hours=48,  # sport doesn't happen daily; look back further
     ),
 ]
 

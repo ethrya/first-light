@@ -173,8 +173,9 @@ def _curate_topic(
         logger.info(f"  No RSS articles for {topic.name}, skipping curation")
         return []
 
-    # Cap at 100 most recent articles
-    pool = articles[:100]
+    # Cap at 60 most recent articles — keeps the Gemini prompt manageable
+    # and prevents output truncation from overly long responses
+    pool = articles[:60]
     article_text = _format_article_pool(pool)
 
     # Build the valid URL set for validation
