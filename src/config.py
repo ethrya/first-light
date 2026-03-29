@@ -66,9 +66,10 @@ STORY TIERS — assign every story a tier:
 Reserve for stories that are genuinely consequential, surprising, or both.
 - Tier 2 (main stories per section): 2 sentences. Informative with a touch \
 of perspective. The backbone of each section.
-- Tier 3 (minor/remaining): One sentence maximum. \
-Claude writes the complete sentence — headline embedded in the prose. \
-E.g. "Victoria scrapped free fares on regional trains, citing budget pressures. — Herald Sun"
+- Tier 3 (minor/remaining): Brief item. Always include a headline field. \
+The summary is one sentence maximum. \
+E.g. headline: "Victoria scraps free regional rail fares", \
+summary: "Citing budget pressures, the state government has ended the scheme. — Herald Sun"
 
 INTRO: 2-4 sentences. Genuine editorial voice. Connect themes across topics \
 where real threads exist. Do NOT stitch three headlines together. \
@@ -138,6 +139,46 @@ Return ONLY valid JSON. No markdown fencing, no commentary outside the JSON.\
 
 TOPICS = [
     Topic(
+        name="Other Top Australian Stories",
+        display_name="Australia",
+        max_stories=4,
+        prompt=(
+            "Economics, business, health, culture, education. Exclude "
+            "climate/energy, AI/tech, and politics covered in other sections."
+        ),
+    ),
+    Topic(
+        name="Australian Politics & Public Sector",
+        display_name="Australian Politics",
+        max_stories=4,
+        prompt=(
+            "Federal and state decisions affecting everyday Australians, "
+            "parliamentary developments, public service news. "
+            "Skip routine press releases and minor political bickering."
+        ),
+    ),
+    Topic(
+        name="Canberra & ACT",
+        display_name="Canberra",
+        max_stories=5,
+        prompt=(
+            "ACT government decisions, local politics, community issues, "
+            "infrastructure, housing, cost of living. The reader lives and "
+            "works in Canberra — this section should feel substantial."
+        ),
+        use_grounding_fallback=True,
+    ),
+    Topic(
+        name="Top Global Stories",
+        display_name="Global",
+        max_stories=4,
+        prompt=(
+            "Geopolitics, economics, conflict, diplomacy. Exclude climate, "
+            "AI, and Australian politics already covered above. "
+            "Prefer stories with Asia-Pacific relevance."
+        ),
+    ),
+    Topic(
         name="Climate Policy & Energy Transition",
         display_name="Climate & Energy",
         max_stories=4,
@@ -156,45 +197,6 @@ TOPICS = [
             "policy, major funding or acquisitions, security incidents. "
             "Skip minor app updates and routine corporate earnings."
         ),
-    ),
-    Topic(
-        name="Australian Politics & Public Sector",
-        display_name="Australian Politics",
-        max_stories=4,
-        prompt=(
-            "Federal and state decisions affecting everyday Australians, "
-            "parliamentary developments, public service news. "
-            "Skip routine press releases and minor political bickering."
-        ),
-    ),
-    Topic(
-        name="Top Global Stories",
-        display_name="Global",
-        max_stories=4,
-        prompt=(
-            "Geopolitics, economics, conflict, diplomacy. Exclude climate, "
-            "AI, and Australian politics already covered above. "
-            "Prefer stories with Asia-Pacific relevance."
-        ),
-    ),
-    Topic(
-        name="Other Top Australian Stories",
-        display_name="Australia",
-        max_stories=3,
-        prompt=(
-            "Economics, business, health, culture, education. Exclude "
-            "climate/energy, AI/tech, and politics already covered above."
-        ),
-    ),
-    Topic(
-        name="Canberra & ACT",
-        display_name="Canberra",
-        max_stories=3,
-        prompt=(
-            "ACT government decisions, local politics, community issues, "
-            "infrastructure, housing, cost of living."
-        ),
-        use_grounding_fallback=True,
     ),
     Topic(
         name="Sports",

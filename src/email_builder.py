@@ -237,12 +237,16 @@ def _render_tier2(story: Story) -> str:
 
 
 def _render_tier3(story: Story) -> str:
-    """Tier 3: brief. One sentence, no separate headline element."""
+    """Tier 3: brief. Bold headline + one-sentence summary."""
+    headline_html = _headline_link(story, font_size=14)
     source_tag = _source_tag(story, font_size=12)
     return (
-        f'<p style="margin:0 0 8px; font-size:13px; color:#555; '
-        f'line-height:1.4;">'
+        f'<div style="margin-bottom:10px;">'
+        f'<p style="margin:0 0 1px; font-size:14px; font-weight:600; '
+        f'color:#1a1a2e;">{headline_html}</p>'
+        f'<p style="margin:0; font-size:13px; color:#555; line-height:1.4;">'
         f"{_esc(story.summary)}{source_tag}</p>"
+        f"</div>"
     )
 
 
