@@ -19,6 +19,7 @@ from .email_sender import send_newsletter
 from .feeds import FEEDS
 from .news_fetcher import curate_with_claude
 from .rss_fetcher import fetch_rss_articles
+from .watch_today import fetch_watch_today
 from .weather import fetch_canberra_weather
 
 logging.basicConfig(
@@ -80,10 +81,13 @@ def main() -> None:
         logger.warning("Weather fetch returned empty")
 
     # ------------------------------------------------------------------
-    # Step 3: Curate with Claude (grounding fallback handled inside)
+    # Step 3: Fetch What to Watch Today + curate with Claude
     # ------------------------------------------------------------------
     gemini_client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
     claude_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    watch_items = fetch_watch_today(gemini_client, today_aest)
+    logger.info(f"Watch Today: {len(watch_items)} items")
 
     stories_by_topic, intro, also_interesting = curate_with_claude(
         claude_client, articles_by_topic, today_aest, gemini_client
@@ -110,10 +114,12 @@ def main() -> None:
     html_body = build_email_html(
         stories_by_topic, today_long,
         intro=intro, weather=weather, also_interesting=also_interesting,
+        watch_today=watch_items,
     )
     plain_body = build_plain_text(
         stories_by_topic, today_long,
         intro=intro, weather=weather, also_interesting=also_interesting,
+        watch_today=watch_items,
     )
     subject = EMAIL_SUBJECT_TEMPLATE.format(day=today_day, date=today_short)
 

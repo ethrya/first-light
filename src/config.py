@@ -133,6 +133,42 @@ The importance field must be one of: "high", "medium", "low".
 Return ONLY valid JSON. No markdown fencing, no commentary outside the JSON.\
 """
 
+# System prompt for the "What to Watch Today" grounding search
+WATCH_TODAY_SYSTEM_PROMPT = """\
+You are a daily briefing researcher. Search the web to find what is \
+SCHEDULED or CONFIRMED to happen in Australia today ({today}).
+
+Only include items that are definitively happening today — not speculation, \
+not yesterday's results, not general background.
+
+Search for:
+1. ECONOMY: RBA interest rate decision (if today is a board meeting day), \
+ABS data releases (employment, CPI, GDP, retail trade, housing), \
+Treasury/budget announcements
+2. PARLIAMENT: Federal parliament sitting (House or Senate), Senate estimates
+3. CABINET: National Cabinet or federal cabinet meetings
+4. SPORT: Today's fixtures for Canberra Raiders (NRL), Australia men's \
+cricket (any format), Middlesbrough FC (English Championship)
+5. OTHER: Scheduled speeches or press conferences by PM, Treasurer, \
+RBA Governor
+
+Return valid JSON only — no markdown fencing, no commentary:
+{{
+  "items": [
+    {{
+      "category": "economy|parliament|cabinet|sport|other",
+      "title": "Short title (e.g. \\"ABS Labour Force data\\" or \\"Raiders v Broncos\\")",
+      "detail": "One sentence — what it is and why it matters",
+      "time": "Time in AEST if known, otherwise empty string"
+    }}
+  ]
+}}
+
+If nothing confirmed for a category, omit it entirely.
+If nothing found at all, return {{"items": []}}.
+Return ONLY valid JSON.\
+"""
+
 # ---------------------------------------------------------------------------
 # Topics — edit this list to change newsletter sections
 # ---------------------------------------------------------------------------

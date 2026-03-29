@@ -2,7 +2,7 @@
 Fetches current-day weather for Canberra from the Open-Meteo API.
 
 No API key required. Uses stdlib urllib only.
-Primary: BOM endpoint. Fallback: forecast endpoint.
+Primary: BOM endpoint. Fallback: forecast endpoint (for any null fields).
 """
 
 import json
@@ -49,38 +49,65 @@ _WMO_DESCRIPTIONS: dict = {
 def fetch_canberra_weather() -> str:
     """Return a one-line weather summary for Canberra today.
 
-    Returns e.g. "Canberra: 4\u201318\u00b0C, partly cloudy. Frost likely early. 30% chance of rain."
+    Returns e.g. "Canberra: 4–18°C, partly cloudy. Frost likely early. 30% chance of rain."
     Returns "" on any failure.
     """
     try:
-        daily = _fetch_daily(_BOM_URL)
+        bom = _fetch_daily(_BOM_URL)
+        forecast = None  # fetched lazily if needed
 
-        t_max = round(daily["temperature_2m_max"][0])
-        t_min = round(daily["temperature_2m_min"][0])
-        wmo = int(daily["weathercode"][0])
-        precip_sum = _safe_float(daily.get("precipitation_sum", [None])[0])
+        def _get_forecast() -> dict:
+            nonlocal forecast
+            if forecast is None:
+                forecast = _fetch_daily(_FORECAST_URL)
+            return forecast
 
-        # precipitation_probability_max can be null on the BOM endpoint
-        prob = _safe_int(daily.get("precipitation_probability_max", [None])[0])
+        # Temperatures: BOM may return null — fall back to forecast
+        t_max_raw = _safe_float(bom.get("temperature_2m_max", [None])[0])
+        t_min_raw = _safe_float(bom.get("temperature_2m_min", [None])[0])
+
+        if t_max_raw is None or t_min_raw is None:
+            logger.debug("BOM temps null — trying forecast endpoint")
+            fc = _get_forecast()
+            if t_max_raw is None:
+                t_max_raw = _safe_float(fc.get("temperature_2m_max", [None])[0])
+            if t_min_raw is None:
+                t_min_raw = _safe_float(fc.get("temperature_2m_min", [None])[0])
+
+        if t_max_raw is None or t_min_raw is None:
+            logger.warning("Temperature data unavailable from both endpoints")
+            return ""
+
+        t_max = round(t_max_raw)
+        t_min = round(t_min_raw)
+
+        # Weathercode
+        wmo_raw = bom.get("weathercode", [None])[0]
+        if wmo_raw is None:
+            wmo_raw = _get_forecast().get("weathercode", [None])[0]
+        wmo = int(wmo_raw) if wmo_raw is not None else 0
+        description = _WMO_DESCRIPTIONS.get(wmo, "variable")
+
+        # Precipitation sum
+        precip_sum = _safe_float(bom.get("precipitation_sum", [None])[0])
+
+        # Rain probability: BOM often returns null — try forecast
+        prob = _safe_int(bom.get("precipitation_probability_max", [None])[0])
         if prob is None:
-            # Try fallback endpoint for that field
             try:
-                fallback = _fetch_daily(_FORECAST_URL)
                 prob = _safe_int(
-                    fallback.get("precipitation_probability_max", [None])[0]
+                    _get_forecast().get("precipitation_probability_max", [None])[0]
                 )
             except Exception:
                 prob = None
-            # Last resort: infer from precip_sum and weathercode
-            if prob is None:
-                if precip_sum is not None and precip_sum > 0:
-                    prob = 60  # rain recorded, treat as likely
-                elif wmo in (51, 53, 55, 61, 63, 65, 80, 81, 82):
-                    prob = 50
-                elif wmo in (95, 96, 99):
-                    prob = 80
-
-        description = _WMO_DESCRIPTIONS.get(wmo, "variable")
+        # Last resort: infer from precip_sum and weathercode
+        if prob is None:
+            if precip_sum is not None and precip_sum > 0:
+                prob = 60
+            elif wmo in (51, 53, 55, 61, 63, 65, 80, 81, 82):
+                prob = 50
+            elif wmo in (95, 96, 99):
+                prob = 80
 
         parts = [f"Canberra: {t_min}\u2013{t_max}\u00b0C, {description}."]
 
@@ -122,14 +149,14 @@ def _fetch_daily(url: str) -> dict:
     return data["daily"]
 
 
-def _safe_float(val) -> float | None:
+def _safe_float(val) -> "float | None":
     try:
         return float(val) if val is not None else None
     except (TypeError, ValueError):
         return None
 
 
-def _safe_int(val) -> int | None:
+def _safe_int(val) -> "int | None":
     try:
         return int(val) if val is not None else None
     except (TypeError, ValueError):
