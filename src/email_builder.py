@@ -5,6 +5,8 @@ All CSS is inline for email client compatibility (Outlook, Gmail, Apple Mail).
 Layout uses tables for maximum cross-client support.
 """
 
+from typing import Optional, Set
+
 from .news_fetcher import Story
 
 
@@ -190,7 +192,7 @@ def _render_top_stories(top: list[Story]) -> str:
 
 def _build_topic_sections(
     stories_by_topic: dict[str, list[Story]],
-    exclude: set[str] | None = None,
+    exclude: Optional[Set[str]] = None,
 ) -> str:
     sections: list[str] = []
     bg_colours = ["#ffffff", "#f9f9f9"]
