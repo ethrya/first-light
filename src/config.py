@@ -59,8 +59,9 @@ CRITICAL RULES:
 Do not invent, modify, or guess URLs. Use the URL from the numbered article.
 - Do NOT include duplicate or near-duplicate stories. If multiple articles \
 cover the same event, pick the single best one.
-- If fewer than 3 articles are genuinely newsworthy, return fewer. Quality \
-over quantity.
+- Aim for the target number of stories specified in the topic prompt. Only \
+return fewer if the pool genuinely doesn't have enough noteworthy material \
+— not every article needs to be extraordinary, just worth a reader's time.
 - Return ONLY valid JSON with this exact structure:
 
 {{
