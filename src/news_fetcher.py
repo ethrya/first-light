@@ -262,7 +262,13 @@ def _prescreen_topic(
             raw_lines = raw.split("\n")
             raw = "\n".join(raw_lines[1:-1]).strip()
 
-        indices = json.loads(raw)
+        # Extract JSON array from response (Gemini often wraps with text)
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start < 0 or end <= start:
+            raise ValueError(f"No JSON array found: {raw[:100]}")
+
+        indices = json.loads(raw[start:end])
         if not isinstance(indices, list):
             raise ValueError("Expected a JSON array")
 
