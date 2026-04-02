@@ -10,6 +10,7 @@ Each topic needs:
   - max_stories: Story cap passed to Claude as editorial guidance
 """
 
+import os
 from dataclasses import dataclass, field
 
 
@@ -29,11 +30,29 @@ class Topic:
 
 GEMINI_MODEL = "gemini-3-flash-preview"
 
+# System prompt for Gemini pre-screening (article relevance ranking)
+PRESCREEN_SYSTEM_PROMPT = """\
+You are a news editor's assistant. Your job is to quickly rank articles \
+by newsworthiness for a daily morning briefing newsletter read by an \
+Australian professional in Canberra.
+
+Prioritise articles that are:
+- Impactful: affects many people or has real-world consequences
+- Significant: represents a meaningful shift, decision, or milestone
+- Surprising: unexpected, counterintuitive, or breaks from the norm
+- Relevant to the Australian context
+- Fresh: prefer today's or yesterday's stories over older ones
+
+Return ONLY a JSON array of the article indices (integers) in order of \
+newsworthiness, most newsworthy first. Example: [3, 0, 7, 12, 1]
+No commentary, no markdown fencing.\
+"""
+
 # ---------------------------------------------------------------------------
 # Claude API settings
 # ---------------------------------------------------------------------------
 
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-4-6"
 CLAUDE_MAX_TOKENS = 8192
 
 CLAUDE_CURATION_SYSTEM_PROMPT = """\

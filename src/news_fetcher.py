@@ -25,6 +25,7 @@ from .config import (
     CLAUDE_CURATION_SYSTEM_PROMPT,
     GEMINI_MODEL,
     GROUNDING_SYSTEM_PROMPT,
+    PRESCREEN_SYSTEM_PROMPT,
     TOPICS,
     Topic,
 )
@@ -94,20 +95,24 @@ def curate_with_claude(
         )
 
     # ------------------------------------------------------------------
-    # Step 3: Build flat article list with input_index
+    # Step 3: Gemini pre-screen — pick top articles per topic
+    # ------------------------------------------------------------------
+    for topic in TOPICS:
+        pool = articles_by_topic.get(topic.name, [])
+        keep = topic.max_stories * 3  # e.g. max 4 stories → keep top 12
+        if len(pool) <= keep:
+            continue  # small enough already
+        screened = _prescreen_topic(gemini_client, topic, pool, keep)
+        articles_by_topic[topic.name] = screened
+
+    # ------------------------------------------------------------------
+    # Step 4: Build flat article list with input_index
     # ------------------------------------------------------------------
     all_articles: list[RawArticle] = []
-    _ARTICLE_CAP = 40  # per topic
 
     for topic in TOPICS:
         pool = articles_by_topic.get(topic.name, [])
-        capped = pool[:_ARTICLE_CAP]
-        all_articles.extend(capped)
-        if len(pool) > _ARTICLE_CAP:
-            logger.info(
-                f"  {topic.name}: capped at {_ARTICLE_CAP} "
-                f"(had {len(pool)})"
-            )
+        all_articles.extend(pool)
 
     logger.info(f"  Total articles in Claude pool: {len(all_articles)}")
 
@@ -115,12 +120,12 @@ def curate_with_claude(
     index_map = {i: a for i, a in enumerate(all_articles)}
 
     # ------------------------------------------------------------------
-    # Step 4: Format user message for Claude
+    # Step 5: Format user message for Claude
     # ------------------------------------------------------------------
     user_message = _build_user_message(all_articles, today)
 
     # ------------------------------------------------------------------
-    # Step 5: Claude API call
+    # Step 6: Claude API call
     # ------------------------------------------------------------------
     try:
         message = anthropic_client.messages.create(
@@ -130,16 +135,27 @@ def curate_with_claude(
             messages=[{"role": "user", "content": user_message}],
         )
         raw = message.content[0].text
+        usage = message.usage
+        # Per-MTok rates: (input, output)
+        _RATES = {"haiku": (1.0, 5.0), "sonnet": (3.0, 15.0), "opus": (15.0, 75.0)}
+        rate = next(
+            (v for k, v in _RATES.items() if k in CLAUDE_MODEL), (3.0, 15.0)
+        )
+        cost = (usage.input_tokens * rate[0] + usage.output_tokens * rate[1]) / 1_000_000
         logger.info(
             f"  Claude response: {len(raw)} chars, "
             f"stop_reason={message.stop_reason}"
+        )
+        logger.info(
+            f"  Claude [{CLAUDE_MODEL}] tokens: {usage.input_tokens} in, "
+            f"{usage.output_tokens} out — ${cost:.4f}"
         )
     except Exception as exc:
         logger.error(f"Claude API error: {exc}")
         return {}, "", None
 
     # ------------------------------------------------------------------
-    # Step 6: Parse and validate response
+    # Step 7: Parse and validate response
     # ------------------------------------------------------------------
     data = _safe_json_loads(raw, "Claude curation")
     if data is None:
@@ -210,18 +226,75 @@ def _grounded_story_to_raw_article(story: Story, topic_name: str) -> RawArticle:
     )
 
 
+def _prescreen_topic(
+    gemini_client: genai.Client,
+    topic: Topic,
+    articles: list,
+    keep: int,
+) -> list:
+    """Use Gemini Flash to pick the top `keep` articles by newsworthiness."""
+    # Build lightweight article list (title + short summary only)
+    lines = []
+    for i, a in enumerate(articles):
+        summary = (a.summary[:150] if a.summary else "").replace("\n", " ")
+        lines.append(f"[{i}] {a.title}\n{summary}")
+
+    dn = topic.display_name or topic.name
+    prompt = (
+        f"Topic: {dn}\n"
+        f"Select the {keep} most newsworthy articles.\n\n"
+        + "\n\n".join(lines)
+    )
+
+    try:
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=PRESCREEN_SYSTEM_PROMPT,
+                temperature=0.0,
+                max_output_tokens=256,
+            ),
+        )
+        raw = getattr(response, "text", "") or ""
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw_lines = raw.split("\n")
+            raw = "\n".join(raw_lines[1:-1]).strip()
+
+        indices = json.loads(raw)
+        if not isinstance(indices, list):
+            raise ValueError("Expected a JSON array")
+
+        # Filter to valid indices within range
+        valid = [idx for idx in indices if isinstance(idx, int) and 0 <= idx < len(articles)]
+        selected = [articles[idx] for idx in valid[:keep]]
+
+        logger.info(
+            f"  Pre-screen {dn}: {len(articles)} → {len(selected)} articles"
+        )
+        return selected
+
+    except Exception as exc:
+        # On any failure, fall back to recency cap
+        logger.warning(
+            f"  Pre-screen failed for {dn}: {exc} — "
+            f"falling back to first {keep}"
+        )
+        return articles[:keep]
+
+
 def _build_user_message(all_articles: list, today: str) -> str:
     """Build the user message for the Claude curation call."""
     lines: list[str] = [f"Today is {today}.\n"]
 
     lines.append("ARTICLE POOL:")
     for i, a in enumerate(all_articles):
-        pub_str = a.published.strftime("%d %b %H:%M UTC")
-        summary = (a.summary[:300] if a.summary else "(no summary)").replace("\n", " ")
+        pub_str = a.published.strftime("%d %b")
+        summary = (a.summary[:150] if a.summary else "").replace("\n", " ")
         lines.append(
-            f"\n[{i}] topic=\"{a.topic}\" | {a.source_name} | {pub_str}\n"
-            f"{a.title}\n"
-            f"{a.url}\n"
+            f"\n[{i}] {a.topic} | {a.source_name} | {pub_str}\n"
+            f"{a.title} | {a.url}\n"
             f"{summary}"
         )
 

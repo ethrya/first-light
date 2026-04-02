@@ -5,7 +5,12 @@ on:
     # 6:30am AEDT (UTC+11) = 19:30 UTC previous day
     # During AEST (Apr-Oct) this fires at 5:30am local time
     - cron: '30 19 * * *'
-  workflow_dispatch: # Manual trigger from the Actions tab
+  workflow_dispatch:
+    inputs:
+      claude_model:
+        description: 'Claude model override (e.g. claude-haiku-4-5-20251001)'
+        required: false
+        default: ''
 
 jobs:
   send-newsletter:
@@ -31,4 +36,5 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          CLAUDE_MODEL: ${{ github.event.inputs.claude_model }}
         run: python -m src.main
