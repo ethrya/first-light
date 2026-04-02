@@ -253,7 +253,7 @@ def _prescreen_topic(
             config=types.GenerateContentConfig(
                 system_instruction=PRESCREEN_SYSTEM_PROMPT,
                 temperature=0.0,
-                max_output_tokens=256,
+                max_output_tokens=1024,
             ),
         )
         raw = getattr(response, "text", "") or ""
