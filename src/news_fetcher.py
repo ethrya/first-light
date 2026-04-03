@@ -257,10 +257,16 @@ def _call_gemini_editorial(
                 system_instruction=CLAUDE_CURATION_SYSTEM_PROMPT,
                 temperature=0.7,
                 max_output_tokens=CLAUDE_MAX_TOKENS,
-                response_mime_type="application/json",
+                # No response_mime_type — constrained JSON mode truncates early
             ),
         )
         raw = getattr(response, "text", "") or ""
+        # Log finish reason
+        try:
+            finish_reason = response.candidates[0].finish_reason
+            logger.info(f"  Gemini finish_reason: {finish_reason}")
+        except (AttributeError, IndexError):
+            pass
         # Log token usage if available
         usage = getattr(response, "usage_metadata", None)
         if usage:
@@ -272,8 +278,7 @@ def _call_gemini_editorial(
                 f"  Gemini [{GEMINI_MODEL}] tokens: {in_tok} in, "
                 f"{out_tok} out — ${cost:.4f}"
             )
-        else:
-            logger.info(f"  Gemini response: {len(raw)} chars")
+        logger.info(f"  Gemini response: {len(raw)} chars")
         return raw
     except Exception as exc:
         logger.error(f"Gemini editorial API error: {exc}")
@@ -573,6 +578,16 @@ def _safe_json_loads(raw: str, topic_name: str) -> Optional[dict]:
     if start >= 0:
         repaired = _repair_truncated_json(raw[start:])
         if repaired is not None:
+            # Reject repairs with suspiciously few sections (editorial responses
+            # should have ~7 sections; allow grounding responses through freely)
+            n_sections = len(repaired.get("sections", []))
+            expected = len(TOPICS)
+            if n_sections and n_sections < expected - 2:
+                logger.warning(
+                    f"Rejected truncated repair for {topic_name}: "
+                    f"only {n_sections}/{expected} sections"
+                )
+                return None
             logger.info(f"Recovered truncated JSON for {topic_name}")
             return repaired
 
