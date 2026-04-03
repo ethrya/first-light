@@ -254,19 +254,11 @@ def _prescreen_topic(
                 system_instruction=PRESCREEN_SYSTEM_PROMPT,
                 temperature=0.0,
                 max_output_tokens=1024,
+                response_mime_type="application/json",
             ),
         )
         raw = getattr(response, "text", "") or ""
         raw = raw.strip()
-        if raw.startswith("```"):
-            raw_lines = raw.split("\n")
-            raw = "\n".join(raw_lines[1:-1]).strip()
-
-        # Extract JSON array from response (Gemini often wraps with text)
-        start = raw.find("[")
-        end = raw.rfind("]") + 1
-        if start < 0 or end <= start:
-            raise ValueError(f"No JSON array found: {raw[:100]}")
 
         indices = json.loads(raw[start:end])
         if not isinstance(indices, list):
