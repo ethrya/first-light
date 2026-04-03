@@ -260,7 +260,7 @@ def _prescreen_topic(
         raw = getattr(response, "text", "") or ""
         raw = raw.strip()
 
-        indices = json.loads(raw[start:end])
+        indices = json.loads(raw)
         if not isinstance(indices, list):
             raise ValueError("Expected a JSON array")
 
