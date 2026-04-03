@@ -260,9 +260,19 @@ def _prescreen_topic(
         raw = getattr(response, "text", "") or ""
         raw = raw.strip()
 
-        indices = json.loads(raw)
-        if not isinstance(indices, list):
-            raise ValueError("Expected a JSON array")
+        # Extract array — Gemini may return object wrapper or add comments
+        import re
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start >= 0 and end > start:
+            array_str = raw[start:end]
+        else:
+            array_str = raw
+        # Strip any non-numeric junk between numbers (comments, labels)
+        numbers = re.findall(r'\d+', array_str)
+        indices = [int(n) for n in numbers]
+        if not indices:
+            raise ValueError(f"No indices found in: {raw[:100]}")
 
         # Filter to valid indices within range
         valid = [idx for idx in indices if isinstance(idx, int) and 0 <= idx < len(articles)]
