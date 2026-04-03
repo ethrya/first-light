@@ -23,6 +23,7 @@ from .config import (
     CLAUDE_MODEL,
     CLAUDE_MAX_TOKENS,
     CLAUDE_CURATION_SYSTEM_PROMPT,
+    EDITORIAL_ENGINE,
     GEMINI_MODEL,
     GROUNDING_SYSTEM_PROMPT,
     PRESCREEN_SYSTEM_PROMPT,
@@ -120,46 +121,30 @@ def curate_with_claude(
     index_map = {i: a for i, a in enumerate(all_articles)}
 
     # ------------------------------------------------------------------
-    # Step 5: Format user message for Claude
+    # Step 5: Format user message
     # ------------------------------------------------------------------
     user_message = _build_user_message(all_articles, today)
 
     # ------------------------------------------------------------------
-    # Step 6: Claude API call
+    # Step 6: Editorial engine call (Claude or Gemini)
     # ------------------------------------------------------------------
-    try:
-        message = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=CLAUDE_MAX_TOKENS,
-            system=CLAUDE_CURATION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        raw = message.content[0].text
-        usage = message.usage
-        # Per-MTok rates: (input, output)
-        _RATES = {"haiku": (1.0, 5.0), "sonnet": (3.0, 15.0), "opus": (15.0, 75.0)}
-        rate = next(
-            (v for k, v in _RATES.items() if k in CLAUDE_MODEL), (3.0, 15.0)
-        )
-        cost = (usage.input_tokens * rate[0] + usage.output_tokens * rate[1]) / 1_000_000
-        logger.info(
-            f"  Claude response: {len(raw)} chars, "
-            f"stop_reason={message.stop_reason}"
-        )
-        logger.info(
-            f"  Claude [{CLAUDE_MODEL}] tokens: {usage.input_tokens} in, "
-            f"{usage.output_tokens} out — ${cost:.4f}"
-        )
-    except Exception as exc:
-        logger.error(f"Claude API error: {exc}")
+    engine = EDITORIAL_ENGINE.lower()
+    logger.info(f"  Editorial engine: {engine}")
+
+    if engine == "gemini":
+        raw = _call_gemini_editorial(gemini_client, user_message)
+    else:
+        raw = _call_claude_editorial(anthropic_client, user_message)
+
+    if raw is None:
         return {}, "", None
 
     # ------------------------------------------------------------------
     # Step 7: Parse and validate response
     # ------------------------------------------------------------------
-    data = _safe_json_loads(raw, "Claude curation")
+    data = _safe_json_loads(raw, f"{engine} curation")
     if data is None:
-        logger.error("Failed to parse Claude response as JSON")
+        logger.error(f"Failed to parse {engine} response as JSON")
         return {}, "", None
 
     intro = (data.get("intro") or "").strip()
@@ -224,6 +209,75 @@ def _grounded_story_to_raw_article(story: Story, topic_name: str) -> RawArticle:
         summary=story.summary,
         topic=topic_name,
     )
+
+
+def _call_claude_editorial(
+    anthropic_client: anthropic.Anthropic,
+    user_message: str,
+) -> str | None:
+    """Call Claude for editorial curation. Returns raw JSON text or None."""
+    try:
+        message = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=CLAUDE_MAX_TOKENS,
+            system=CLAUDE_CURATION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        raw = message.content[0].text
+        usage = message.usage
+        _RATES = {"haiku": (1.0, 5.0), "sonnet": (3.0, 15.0), "opus": (15.0, 75.0)}
+        rate = next(
+            (v for k, v in _RATES.items() if k in CLAUDE_MODEL), (3.0, 15.0)
+        )
+        cost = (usage.input_tokens * rate[0] + usage.output_tokens * rate[1]) / 1_000_000
+        logger.info(
+            f"  Claude response: {len(raw)} chars, "
+            f"stop_reason={message.stop_reason}"
+        )
+        logger.info(
+            f"  Claude [{CLAUDE_MODEL}] tokens: {usage.input_tokens} in, "
+            f"{usage.output_tokens} out — ${cost:.4f}"
+        )
+        return raw
+    except Exception as exc:
+        logger.error(f"Claude API error: {exc}")
+        return None
+
+
+def _call_gemini_editorial(
+    gemini_client: genai.Client,
+    user_message: str,
+) -> str | None:
+    """Call Gemini for editorial curation. Returns raw JSON text or None."""
+    try:
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=user_message,
+            config=types.GenerateContentConfig(
+                system_instruction=CLAUDE_CURATION_SYSTEM_PROMPT,
+                temperature=0.7,
+                max_output_tokens=CLAUDE_MAX_TOKENS,
+                response_mime_type="application/json",
+            ),
+        )
+        raw = getattr(response, "text", "") or ""
+        # Log token usage if available
+        usage = getattr(response, "usage_metadata", None)
+        if usage:
+            in_tok = getattr(usage, "prompt_token_count", 0) or 0
+            out_tok = getattr(usage, "candidates_token_count", 0) or 0
+            # Gemini 3 Flash: $0.50/$3.00 per MTok
+            cost = (in_tok * 0.50 + out_tok * 3.0) / 1_000_000
+            logger.info(
+                f"  Gemini [{GEMINI_MODEL}] tokens: {in_tok} in, "
+                f"{out_tok} out — ${cost:.4f}"
+            )
+        else:
+            logger.info(f"  Gemini response: {len(raw)} chars")
+        return raw
+    except Exception as exc:
+        logger.error(f"Gemini editorial API error: {exc}")
+        return None
 
 
 def _prescreen_topic(
