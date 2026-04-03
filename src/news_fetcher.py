@@ -247,8 +247,10 @@ def _call_claude_editorial(
 _EDITORIAL_MODEL_CANDIDATES = [
     "gemini-2.5-pro-exp-03-25",
     "gemini-2.0-flash",
-    GEMINI_MODEL,
     "gemini-2.0-flash-exp",
+    "gemini-1.5-pro-latest",
+    "gemini-1.5-flash-latest",
+    GEMINI_MODEL,
 ]
 
 
@@ -281,12 +283,14 @@ def _call_gemini_editorial(
 
         raw = getattr(response, "text", "") or ""
 
-        # Log finish reason and token usage
+        # Check finish reason — MAX_TOKENS means output was cut short; try next
+        finish_reason = None
         try:
             finish_reason = response.candidates[0].finish_reason
             logger.info(f"  Gemini [{model}] finish_reason: {finish_reason}")
         except (AttributeError, IndexError):
             pass
+
         usage = getattr(response, "usage_metadata", None)
         if usage:
             in_tok = getattr(usage, "prompt_token_count", 0) or 0
@@ -297,6 +301,13 @@ def _call_gemini_editorial(
                 f"{out_tok} out — ${cost:.4f}"
             )
         logger.info(f"  Gemini response: {len(raw)} chars")
+
+        # If MAX_TOKENS, this model can't handle the full output — try next
+        finish_str = str(finish_reason)
+        if "MAX_TOKENS" in finish_str:
+            logger.info(f"  Gemini [{model}] hit MAX_TOKENS — trying next model")
+            continue
+
         return raw
 
     logger.error("Gemini editorial: no available model found")
