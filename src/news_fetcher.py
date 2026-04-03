@@ -244,45 +244,63 @@ def _call_claude_editorial(
         return None
 
 
+_EDITORIAL_MODEL_CANDIDATES = [
+    "gemini-2.5-pro-exp-03-25",
+    "gemini-2.0-flash",
+    GEMINI_MODEL,
+    "gemini-2.0-flash-exp",
+]
+
+
 def _call_gemini_editorial(
     gemini_client: genai.Client,
     user_message: str,
 ) -> str | None:
-    """Call Gemini for editorial curation. Returns raw JSON text or None."""
-    try:
-        response = gemini_client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=CLAUDE_CURATION_SYSTEM_PROMPT,
-                temperature=0.7,
-                max_output_tokens=CLAUDE_MAX_TOKENS,
-                # No response_mime_type — constrained JSON mode truncates early
-            ),
-        )
+    """Call Gemini for editorial curation. Returns raw JSON text or None.
+
+    Tries models in order — gemini-3-flash-preview has a ~500 token output cap
+    for non-grounded calls, so we prefer 2.5-pro or 2.0-flash instead.
+    """
+    for model in _EDITORIAL_MODEL_CANDIDATES:
+        try:
+            response = gemini_client.models.generate_content(
+                model=model,
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    system_instruction=CLAUDE_CURATION_SYSTEM_PROMPT,
+                    temperature=0.7,
+                    max_output_tokens=CLAUDE_MAX_TOKENS,
+                ),
+            )
+        except Exception as exc:
+            if "404" in str(exc) or "NOT_FOUND" in str(exc) or "deprecated" in str(exc).lower():
+                logger.info(f"  Gemini editorial: model {model} unavailable, trying next")
+                continue
+            logger.error(f"Gemini editorial API error on {model}: {exc}")
+            return None
+
         raw = getattr(response, "text", "") or ""
-        # Log finish reason
+
+        # Log finish reason and token usage
         try:
             finish_reason = response.candidates[0].finish_reason
-            logger.info(f"  Gemini finish_reason: {finish_reason}")
+            logger.info(f"  Gemini [{model}] finish_reason: {finish_reason}")
         except (AttributeError, IndexError):
             pass
-        # Log token usage if available
         usage = getattr(response, "usage_metadata", None)
         if usage:
             in_tok = getattr(usage, "prompt_token_count", 0) or 0
             out_tok = getattr(usage, "candidates_token_count", 0) or 0
-            # Gemini 3 Flash: $0.50/$3.00 per MTok
             cost = (in_tok * 0.50 + out_tok * 3.0) / 1_000_000
             logger.info(
-                f"  Gemini [{GEMINI_MODEL}] tokens: {in_tok} in, "
+                f"  Gemini [{model}] tokens: {in_tok} in, "
                 f"{out_tok} out — ${cost:.4f}"
             )
         logger.info(f"  Gemini response: {len(raw)} chars")
         return raw
-    except Exception as exc:
-        logger.error(f"Gemini editorial API error: {exc}")
-        return None
+
+    logger.error("Gemini editorial: no available model found")
+    return None
 
 
 def _prescreen_topic(
