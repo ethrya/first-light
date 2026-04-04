@@ -11,6 +11,10 @@ on:
         description: 'Claude model override (e.g. claude-haiku-4-5-20251001)'
         required: false
         default: ''
+      editorial_engine:
+        description: 'Editorial engine: claude or gemini'
+        required: false
+        default: ''
 
 jobs:
   send-newsletter:
@@ -37,4 +41,5 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           CLAUDE_MODEL: ${{ github.event.inputs.claude_model }}
+          EDITORIAL_ENGINE: ${{ github.event.inputs.editorial_engine }}
         run: python -m src.main

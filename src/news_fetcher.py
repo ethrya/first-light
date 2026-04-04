@@ -23,6 +23,7 @@ from .config import (
     CLAUDE_MODEL,
     CLAUDE_MAX_TOKENS,
     CLAUDE_CURATION_SYSTEM_PROMPT,
+    EDITORIAL_ENGINE,
     GEMINI_MODEL,
     GROUNDING_SYSTEM_PROMPT,
     PRESCREEN_SYSTEM_PROMPT,
@@ -120,46 +121,30 @@ def curate_with_claude(
     index_map = {i: a for i, a in enumerate(all_articles)}
 
     # ------------------------------------------------------------------
-    # Step 5: Format user message for Claude
+    # Step 5: Format user message
     # ------------------------------------------------------------------
     user_message = _build_user_message(all_articles, today)
 
     # ------------------------------------------------------------------
-    # Step 6: Claude API call
+    # Step 6: Editorial engine call (Claude or Gemini)
     # ------------------------------------------------------------------
-    try:
-        message = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=CLAUDE_MAX_TOKENS,
-            system=CLAUDE_CURATION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        raw = message.content[0].text
-        usage = message.usage
-        # Per-MTok rates: (input, output)
-        _RATES = {"haiku": (1.0, 5.0), "sonnet": (3.0, 15.0), "opus": (15.0, 75.0)}
-        rate = next(
-            (v for k, v in _RATES.items() if k in CLAUDE_MODEL), (3.0, 15.0)
-        )
-        cost = (usage.input_tokens * rate[0] + usage.output_tokens * rate[1]) / 1_000_000
-        logger.info(
-            f"  Claude response: {len(raw)} chars, "
-            f"stop_reason={message.stop_reason}"
-        )
-        logger.info(
-            f"  Claude [{CLAUDE_MODEL}] tokens: {usage.input_tokens} in, "
-            f"{usage.output_tokens} out — ${cost:.4f}"
-        )
-    except Exception as exc:
-        logger.error(f"Claude API error: {exc}")
+    engine = EDITORIAL_ENGINE.lower()
+    logger.info(f"  Editorial engine: {engine}")
+
+    if engine == "gemini":
+        raw = _call_gemini_editorial(gemini_client, user_message)
+    else:
+        raw = _call_claude_editorial(anthropic_client, user_message)
+
+    if raw is None:
         return {}, "", None
 
     # ------------------------------------------------------------------
     # Step 7: Parse and validate response
     # ------------------------------------------------------------------
-    data = _safe_json_loads(raw, "Claude curation")
+    data = _safe_json_loads(raw, f"{engine} curation")
     if data is None:
-        logger.error("Failed to parse Claude response as JSON")
+        logger.error(f"Failed to parse {engine} response as JSON")
         return {}, "", None
 
     intro = (data.get("intro") or "").strip()
@@ -224,6 +209,109 @@ def _grounded_story_to_raw_article(story: Story, topic_name: str) -> RawArticle:
         summary=story.summary,
         topic=topic_name,
     )
+
+
+def _call_claude_editorial(
+    anthropic_client: anthropic.Anthropic,
+    user_message: str,
+) -> str | None:
+    """Call Claude for editorial curation. Returns raw JSON text or None."""
+    try:
+        message = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=CLAUDE_MAX_TOKENS,
+            system=CLAUDE_CURATION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        raw = message.content[0].text
+        usage = message.usage
+        _RATES = {"haiku": (1.0, 5.0), "sonnet": (3.0, 15.0), "opus": (15.0, 75.0)}
+        rate = next(
+            (v for k, v in _RATES.items() if k in CLAUDE_MODEL), (3.0, 15.0)
+        )
+        cost = (usage.input_tokens * rate[0] + usage.output_tokens * rate[1]) / 1_000_000
+        logger.info(
+            f"  Claude response: {len(raw)} chars, "
+            f"stop_reason={message.stop_reason}"
+        )
+        logger.info(
+            f"  Claude [{CLAUDE_MODEL}] tokens: {usage.input_tokens} in, "
+            f"{usage.output_tokens} out — ${cost:.4f}"
+        )
+        return raw
+    except Exception as exc:
+        logger.error(f"Claude API error: {exc}")
+        return None
+
+
+_EDITORIAL_MODEL_CANDIDATES = [
+    "gemini-2.5-pro-exp-03-25",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+    "gemini-1.5-pro-latest",
+    "gemini-1.5-flash-latest",
+    GEMINI_MODEL,
+]
+
+
+def _call_gemini_editorial(
+    gemini_client: genai.Client,
+    user_message: str,
+) -> str | None:
+    """Call Gemini for editorial curation. Returns raw JSON text or None.
+
+    Tries models in order — gemini-3-flash-preview has a ~500 token output cap
+    for non-grounded calls, so we prefer 2.5-pro or 2.0-flash instead.
+    """
+    for model in _EDITORIAL_MODEL_CANDIDATES:
+        try:
+            response = gemini_client.models.generate_content(
+                model=model,
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    system_instruction=CLAUDE_CURATION_SYSTEM_PROMPT,
+                    temperature=0.7,
+                    max_output_tokens=CLAUDE_MAX_TOKENS,
+                ),
+            )
+        except Exception as exc:
+            if "404" in str(exc) or "NOT_FOUND" in str(exc) or "deprecated" in str(exc).lower():
+                logger.info(f"  Gemini editorial: model {model} unavailable, trying next")
+                continue
+            logger.error(f"Gemini editorial API error on {model}: {exc}")
+            return None
+
+        raw = getattr(response, "text", "") or ""
+
+        # Check finish reason — MAX_TOKENS means output was cut short; try next
+        finish_reason = None
+        try:
+            finish_reason = response.candidates[0].finish_reason
+            logger.info(f"  Gemini [{model}] finish_reason: {finish_reason}")
+        except (AttributeError, IndexError):
+            pass
+
+        usage = getattr(response, "usage_metadata", None)
+        if usage:
+            in_tok = getattr(usage, "prompt_token_count", 0) or 0
+            out_tok = getattr(usage, "candidates_token_count", 0) or 0
+            cost = (in_tok * 0.50 + out_tok * 3.0) / 1_000_000
+            logger.info(
+                f"  Gemini [{model}] tokens: {in_tok} in, "
+                f"{out_tok} out — ${cost:.4f}"
+            )
+        logger.info(f"  Gemini response: {len(raw)} chars")
+
+        # If MAX_TOKENS, this model can't handle the full output — try next
+        finish_str = str(finish_reason)
+        if "MAX_TOKENS" in finish_str:
+            logger.info(f"  Gemini [{model}] hit MAX_TOKENS — trying next model")
+            continue
+
+        return raw
+
+    logger.error("Gemini editorial: no available model found")
+    return None
 
 
 def _prescreen_topic(
@@ -344,6 +432,16 @@ def _build_user_message(all_articles: list, today: str) -> str:
     return "\n".join(lines)
 
 
+def _strip_trailing_source(summary: str, source_name: str) -> str:
+    """Remove trailing '— Source Name' if the model embedded it in the summary."""
+    if not summary or not source_name:
+        return summary
+    import re
+    # Match " — Source Name" at the end, with optional whitespace variations
+    pattern = r'\s*\u2014\s*' + re.escape(source_name) + r'\s*$'
+    return re.sub(pattern, '', summary).rstrip()
+
+
 def _validate_story_item(
     item: dict,
     index_map: dict,
@@ -373,10 +471,13 @@ def _validate_story_item(
     tier = max(1, min(3, int(item.get("tier", 2))))
     importance = "high" if tier == 1 else "medium" if tier == 2 else "low"
 
+    source_name = item.get("source_name") or source_article.source_name
+    summary = _strip_trailing_source(item.get("summary", ""), source_name)
+
     return Story(
         headline=item.get("headline", source_article.title),
-        summary=item.get("summary", ""),
-        source_name=item.get("source_name") or source_article.source_name,
+        summary=summary,
+        source_name=source_name,
         source_url=source_article.url,  # always use pool URL
         importance=importance,
         topic=topic_name,
@@ -519,6 +620,16 @@ def _safe_json_loads(raw: str, topic_name: str) -> Optional[dict]:
     if start >= 0:
         repaired = _repair_truncated_json(raw[start:])
         if repaired is not None:
+            # Reject repairs with suspiciously few sections (editorial responses
+            # should have ~7 sections; allow grounding responses through freely)
+            n_sections = len(repaired.get("sections", []))
+            expected = len(TOPICS)
+            if n_sections and n_sections < expected - 2:
+                logger.warning(
+                    f"Rejected truncated repair for {topic_name}: "
+                    f"only {n_sections}/{expected} sections"
+                )
+                return None
             logger.info(f"Recovered truncated JSON for {topic_name}")
             return repaired
 
