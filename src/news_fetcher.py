@@ -432,6 +432,16 @@ def _build_user_message(all_articles: list, today: str) -> str:
     return "\n".join(lines)
 
 
+def _strip_trailing_source(summary: str, source_name: str) -> str:
+    """Remove trailing '— Source Name' if the model embedded it in the summary."""
+    if not summary or not source_name:
+        return summary
+    import re
+    # Match " — Source Name" at the end, with optional whitespace variations
+    pattern = r'\s*\u2014\s*' + re.escape(source_name) + r'\s*$'
+    return re.sub(pattern, '', summary).rstrip()
+
+
 def _validate_story_item(
     item: dict,
     index_map: dict,
@@ -461,10 +471,13 @@ def _validate_story_item(
     tier = max(1, min(3, int(item.get("tier", 2))))
     importance = "high" if tier == 1 else "medium" if tier == 2 else "low"
 
+    source_name = item.get("source_name") or source_article.source_name
+    summary = _strip_trailing_source(item.get("summary", ""), source_name)
+
     return Story(
         headline=item.get("headline", source_article.title),
-        summary=item.get("summary", ""),
-        source_name=item.get("source_name") or source_article.source_name,
+        summary=summary,
+        source_name=source_name,
         source_url=source_article.url,  # always use pool URL
         importance=importance,
         topic=topic_name,
