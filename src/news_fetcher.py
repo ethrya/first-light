@@ -606,30 +606,25 @@ def _safe_json_loads(raw: str, topic_name: str) -> Optional[dict]:
     """Try to parse JSON, with fallbacks for extraction and truncation repair."""
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        logger.debug(f"  JSON parse error for {topic_name}: {exc}")
 
     start = raw.find("{")
     end = raw.rfind("}") + 1
     if start >= 0 and end > start:
         try:
             return json.loads(raw[start:end])
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as exc:
+            logger.debug(f"  JSON extraction failed for {topic_name}: {exc}")
+            # Log the surrounding context to help diagnose the error
+            col = getattr(exc, "pos", None)
+            if col is not None:
+                snippet = raw[max(start, start + col - 80):start + col + 80]
+                logger.warning(f"  JSON error near char {col}: ...{snippet!r}...")
 
     if start >= 0:
         repaired = _repair_truncated_json(raw[start:])
         if repaired is not None:
-            # Reject repairs with suspiciously few sections (editorial responses
-            # should have ~7 sections; allow grounding responses through freely)
-            n_sections = len(repaired.get("sections", []))
-            expected = len(TOPICS)
-            if n_sections and n_sections < expected - 2:
-                logger.warning(
-                    f"Rejected truncated repair for {topic_name}: "
-                    f"only {n_sections}/{expected} sections"
-                )
-                return None
             logger.info(f"Recovered truncated JSON for {topic_name}")
             return repaired
 
