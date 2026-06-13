@@ -2,9 +2,8 @@ name: First Light Newsletter
 
 on:
   schedule:
-    # 6:30am AEDT (UTC+11) = 19:30 UTC previous day
-    # During AEST (Apr-Oct) this fires at 5:30am local time
-    - cron: '30 19 * * *'
+    # 6:30am AEST (UTC+10) / 7:30am AEDT (UTC+11)
+    - cron: '30 20 * * *'
   workflow_dispatch:
     inputs:
       claude_model:
