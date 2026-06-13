@@ -261,8 +261,9 @@ def _call_gemini_editorial(
 ) -> str | None:
     """Call Gemini for editorial curation. Returns raw JSON text or None.
 
-    Tries models in order — gemini-3-flash-preview has a ~500 token output cap
-    for non-grounded calls, so we prefer 2.5-pro or 2.0-flash instead.
+    Tries models in order. Thinking-enabled models (gemini-3.5-flash etc.)
+    consume thinking tokens from max_output_tokens, so thinking is disabled
+    and max_output_tokens is set high enough to leave room for actual output.
     """
     for model in _EDITORIAL_MODEL_CANDIDATES:
         try:
@@ -272,7 +273,13 @@ def _call_gemini_editorial(
                 config=types.GenerateContentConfig(
                     system_instruction=CLAUDE_CURATION_SYSTEM_PROMPT,
                     temperature=0.7,
-                    max_output_tokens=CLAUDE_MAX_TOKENS,
+                    # Use a large output budget — thinking-enabled models (e.g.
+                    # gemini-3.5-flash) consume thinking tokens from this limit,
+                    # so we need headroom beyond the ~5k tokens of actual output.
+                    max_output_tokens=32768,
+                    # Disable thinking — we don't need chain-of-thought reasoning
+                    # for structured JSON generation and it consumes output budget.
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
                 ),
             )
         except Exception as exc:
