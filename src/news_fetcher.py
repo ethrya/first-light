@@ -245,12 +245,13 @@ def _call_claude_editorial(
 
 
 _EDITORIAL_MODEL_CANDIDATES = [
+    "gemini-3.5-flash",          # frontier-grade, $1.50/$9.00 per MTok
     "gemini-2.5-pro-exp-03-25",
     "gemini-2.0-flash",
     "gemini-2.0-flash-exp",
     "gemini-1.5-pro-latest",
     "gemini-1.5-flash-latest",
-    GEMINI_MODEL,
+    GEMINI_MODEL,                # gemini-3-flash-preview, last resort
 ]
 
 
@@ -295,7 +296,19 @@ def _call_gemini_editorial(
         if usage:
             in_tok = getattr(usage, "prompt_token_count", 0) or 0
             out_tok = getattr(usage, "candidates_token_count", 0) or 0
-            cost = (in_tok * 0.50 + out_tok * 3.0) / 1_000_000
+            # Per-model rates (input/output per MTok)
+            _GEMINI_RATES = {
+                "3.5-flash": (1.50, 9.00),
+                "2.5-flash": (0.30, 2.50),
+                "2.5-pro":   (1.25, 10.00),
+                "2.0-flash": (0.10, 0.40),
+                "1.5-pro":   (1.25, 5.00),
+                "1.5-flash": (0.075, 0.30),
+            }
+            rate = next(
+                (v for k, v in _GEMINI_RATES.items() if k in model), (0.50, 3.00)
+            )
+            cost = (in_tok * rate[0] + out_tok * rate[1]) / 1_000_000
             logger.info(
                 f"  Gemini [{model}] tokens: {in_tok} in, "
                 f"{out_tok} out — ${cost:.4f}"
