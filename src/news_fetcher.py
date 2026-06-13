@@ -417,7 +417,7 @@ def _build_user_message(all_articles: list, today: str) -> str:
     lines.append("\n\nEDITORIAL GUIDANCE PER SECTION:")
     for topic in TOPICS:
         dn = topic.display_name or topic.name
-        lines.append(f"- {dn} (max {topic.max_stories}): {topic.prompt}")
+        lines.append(f"- {dn} (include {topic.max_stories} stories — use all slots): {topic.prompt}")
 
     lines.append(
         "\n\nReturn a JSON object with this exact schema:\n"

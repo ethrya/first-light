@@ -90,7 +90,8 @@ STORY TIERS — assign every story a tier:
 3-4 sentences. Give texture and voice. Connect to broader context. \
 Reserve for stories that are genuinely consequential, surprising, or both.
 - Tier 2 (main stories per section): 2 sentences. Informative with a touch \
-of perspective. The backbone of each section.
+of perspective. The backbone of each section. Fill the full story count \
+specified for each section — do not leave slots empty.
 - Tier 3 (minor/remaining): Brief item. Always include a headline field. \
 The summary is one sentence maximum. \
 E.g. headline: "Victoria scraps free regional rail fares", \
