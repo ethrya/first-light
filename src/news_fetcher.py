@@ -225,9 +225,14 @@ def _call_claude_editorial(
         )
         raw = message.content[0].text
         usage = message.usage
-        _RATES = {"haiku": (1.0, 5.0), "sonnet": (3.0, 15.0), "opus": (15.0, 75.0)}
+        _RATES = {
+            "haiku": (1.0, 5.0),
+            "sonnet-4-6": (3.0, 15.0),
+            "sonnet": (2.0, 10.0),  # sonnet-5 and later
+            "opus": (5.0, 25.0),
+        }
         rate = next(
-            (v for k, v in _RATES.items() if k in CLAUDE_MODEL), (3.0, 15.0)
+            (v for k, v in _RATES.items() if k in CLAUDE_MODEL), (2.0, 10.0)
         )
         cost = (usage.input_tokens * rate[0] + usage.output_tokens * rate[1]) / 1_000_000
         logger.info(
@@ -245,13 +250,13 @@ def _call_claude_editorial(
 
 
 _EDITORIAL_MODEL_CANDIDATES = [
-    "gemini-3.5-flash",          # frontier-grade, $1.50/$9.00 per MTok
+    GEMINI_MODEL,                 # gemini-3.8-flash — $0.75/$3.75 per MTok
+    "gemini-3.5-flash",           # $1.50/$9.00 per MTok
     "gemini-2.5-pro-exp-03-25",
     "gemini-2.0-flash",
     "gemini-2.0-flash-exp",
     "gemini-1.5-pro-latest",
     "gemini-1.5-flash-latest",
-    GEMINI_MODEL,                # gemini-3-flash-preview, last resort
 ]
 
 
@@ -305,6 +310,7 @@ def _call_gemini_editorial(
             out_tok = getattr(usage, "candidates_token_count", 0) or 0
             # Per-model rates (input/output per MTok)
             _GEMINI_RATES = {
+                "3.8-flash": (0.75, 3.75),  # promo rate through 31 Dec 2026
                 "3.5-flash": (1.50, 9.00),
                 "2.5-flash": (0.30, 2.50),
                 "2.5-pro":   (1.25, 10.00),

@@ -28,7 +28,7 @@ class Topic:
 # Gemini API settings (grounding fallback only)
 # ---------------------------------------------------------------------------
 
-GEMINI_MODEL = "gemini-3-flash-preview"
+GEMINI_MODEL = "gemini-3.8-flash"
 
 # System prompt for Gemini pre-screening (article relevance ranking)
 PRESCREEN_SYSTEM_PROMPT = """\
@@ -58,7 +58,7 @@ EDITORIAL_ENGINE = os.environ.get("EDITORIAL_ENGINE") or "claude"
 # Claude API settings
 # ---------------------------------------------------------------------------
 
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-4-6"
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5"
 CLAUDE_MAX_TOKENS = 8192
 
 CLAUDE_CURATION_SYSTEM_PROMPT = """\
