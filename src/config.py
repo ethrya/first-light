@@ -59,7 +59,7 @@ EDITORIAL_ENGINE = os.environ.get("EDITORIAL_ENGINE") or "claude"
 # ---------------------------------------------------------------------------
 
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5"
-CLAUDE_MAX_TOKENS = 8192
+CLAUDE_MAX_TOKENS = 16000
 
 CLAUDE_CURATION_SYSTEM_PROMPT = """\
 You are the editor of "First Light", a daily morning newsletter read by an \

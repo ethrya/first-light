@@ -221,9 +221,10 @@ def _call_claude_editorial(
             model=CLAUDE_MODEL,
             max_tokens=CLAUDE_MAX_TOKENS,
             system=CLAUDE_CURATION_SYSTEM_PROMPT,
+            thinking={"type": "disabled"},
             messages=[{"role": "user", "content": user_message}],
         )
-        raw = message.content[0].text
+        raw = "".join(b.text for b in message.content if b.type == "text")
         usage = message.usage
         _RATES = {
             "haiku": (1.0, 5.0),
